@@ -23,6 +23,17 @@ st.title("Dashboard APS - Hipertensão e Diabetes")
 st.caption("Painel para acompanhamento territorial, busca ativa e monitoramento por equipe e microárea.")
 
 
+def file_uploader_compat(label, type=None):
+    kwargs = {}
+    if type is not None:
+        kwargs['type'] = type
+    try:
+        return st.file_uploader(label, **kwargs)
+    except AttributeError:
+        return st.sidebar.file_uploader(label, **kwargs)
+
+
+
 def carregar_planilha_generica(arquivo):
     nome = arquivo.name.lower()
     arquivo.seek(0)
@@ -255,11 +266,4 @@ def render_siaps_hipertensao_boas_praticas(df):
     st.download_button(
         'Exportar lista nominal SIAPS - Hipertensão',
         data=dataframeparaexcelbytes(lista[colunas_saida]),
-        file_name='siaps_hipertensao_boas_praticas.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        key='download_siaps_hipertensao',
-    )
-    st.dataframe(lista[colunas_saida], use_container_width=True)
-
-
-arquivo = st.file_uplo
+        file_name
