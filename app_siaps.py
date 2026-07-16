@@ -151,10 +151,10 @@ def render_siaps_hipertensao_boas_praticas(df):
 arquivo = st.file_uploader('Envie a planilha correspondente', type=['xlsx', 'xls', 'csv'])
 
 with st.expander('Como usar'):
-    st.markdown('- Envie a planilha correspondente.
+    st.markdown('''- Envie a planilha correspondente.
 - O sistema tenta identificar automaticamente o tipo de relatório.
 - Para planilhas SIAPS de boas práticas, o cabeçalho da linha 18 é lido automaticamente.
-- Para os relatórios antigos, a lógica atual continua disponível.')
+- Para os relatórios antigos, a lógica atual continua disponível.''')
 
 if arquivo is None:
     st.info('Aguardando upload da planilha.')
