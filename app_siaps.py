@@ -266,4 +266,55 @@ def render_siaps_hipertensao_boas_praticas(df):
     st.download_button(
         'Exportar lista nominal SIAPS - Hipertensão',
         data=dataframeparaexcelbytes(lista[colunas_saida]),
-        file_name
+        file_name='siaps_hipertensao_boas_praticas.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        key='download_siaps_hipertensao',
+    )
+    st.dataframe(lista[colunas_saida], use_container_width=True)
+
+
+arquivo = file_uploader_compat('Envie a planilha correspondente', type=['xlsx', 'xls', 'csv'])
+
+with st.expander('Como usar'):
+    st.markdown(
+        """
+- Envie a planilha correspondente.
+- O sistema tenta identificar automaticamente o tipo de relatório.
+- Para planilhas SIAPS de boas práticas, o cabeçalho da linha 18 é lido automaticamente.
+- Para os relatórios antigos, a lógica atual continua disponível.
+        """
+    )
+
+if arquivo is None:
+    st.info('Aguardando upload da planilha.')
+else:
+    try:
+        tipo_siaps = None
+        df_siaps = None
+
+        if arquivo.name.lower().endswith(('.xlsx', '.xls')):
+            arquivo.seek(0)
+            try:
+                df_siaps = pd.read_excel(arquivo, header=17)
+                tipo_siaps = detectar_tipo_siaps(df_siaps, arquivo.name)
+            except Exception as e:
+                st.warning(f'Falha ao tentar ler como SIAPS: {e}')
+                tipo_siaps = None
+
+        if tipo_siaps == 'SIAPS_HIPERTENSAO_BOAS_PRATICAS':
+            exibir_cabecalho_analise('Hipertensão - Boas Práticas SIAPS', 'automática')
+            render_siaps_hipertensao_boas_praticas(df_siaps)
+        else:
+            arquivo.seek(0)
+            df = carregar_planilha_generica(arquivo)
+            linhadetectada, origem = detectar_linha_cuidado(df, arquivo.name)
+            if linhadetectada is None:
+                st.warning('Não foi possível identificar automaticamente a linha de cuidado. Escolha manualmente abaixo.')
+                secao = st.radio('Linha de cuidado', ['Hipertensão', 'Diabetes'], horizontal=True, key='linhamanualprincipal')
+                origem = 'manual'
+            else:
+                secao = linhadetectada
+            exibir_cabecalho_analise(secao, origem)
+            st.info('Esta versão está pronta para o fluxo SIAPS de hipertensão. O fluxo antigo completo ainda não foi reintegrado aqui.')
+    except Exception as e:
+        st.error(f'Não foi possível processar a planilha: {e}')
