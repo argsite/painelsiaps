@@ -27,7 +27,7 @@ st.title('🏥 Dashboard APS - Hipertensão')
 MAPA_INDICADORES = {'A': 'A - Consultas', 'B': 'B - P.A.', 'C': 'C - Peso/Altura', 'D': 'D - Visitas'}
 
 with st.sidebar:
-    st.header("Uploads de Arquivos")
+    st.header("Uploads")
     arq_siaps = st.file_uploader('1. Planilha SIAPS', type=['xlsx'])
     arq_cad = st.file_uploader('2. Planilha Complementar', type=['xlsx'])
 
@@ -38,16 +38,15 @@ if arq_siaps and arq_cad:
     df_siaps['Contém no SIAPS'] = 'X'
     df_cad['Contém na Complementar'] = 'X'
     
-    # Merge com sufixos explícitos
     df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
     df_final = df_final[df_final['CPF_key'].str.match(r'^\d{11}$')]
 
-    # Busca específica para indicadores (Sempre busca no _siaps)
+    # Função corrigida para buscar colunas renomeadas pelo merge
     def get_indicador(key):
-        col_nome = f"{key}_siaps"
-        return df_final[col_nome] if col_nome in df_final.columns else ''
+        # Procura por "A_siaps" ou "A" (caso não tenha sofrido merge)
+        col_name = next((c for c in df_final.columns if c.startswith(f"{key}_siaps") or c == key), None)
+        return df_final[col_name].fillna('') if col_name else ''
 
-    # Busca geral para dados demográficos (busca no geral)
     def get_demografia(options):
         match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options)), None)
         return df_final[match].fillna('') if match else ''
@@ -66,11 +65,10 @@ if arq_siaps and arq_cad:
         'B': get_indicador('B'),
         'C': get_indicador('C'),
         'D': get_indicador('D'),
-        'Contém no SIAPS': df_final.get('Contém no SIAPS', '').fillna(''),
-        'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
+        'Contém no SIAPS': df_final.get('Contém no SIAPS_siaps', df_final.get('Contém no SIAPS', '')).fillna(''),
+        'Contém na Complementar': df_final.get('Contém na Complementar_cad', df_final.get('Contém na Complementar', '')).fillna('')
     })
 
-    # --- Painel ---
     st.subheader('Monitoramento de Boas Práticas')
     total = len(df_lista)
     c1, c2, c3, c4, c5 = st.columns(5)
