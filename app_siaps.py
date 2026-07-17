@@ -36,15 +36,15 @@ def carregar_planilha_generica(arquivo):
     nome = arquivo.name.lower()
     arquivo.seek(0)
     if nome.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(arquivo, dtype=str)
+        return pd.read_excel(arquivo)
     for enc in ['utf-8', 'latin1', 'cp1252']:
         try:
             arquivo.seek(0)
-            return pd.read_csv(arquivo, encoding=enc, dtype=str)
+            return pd.read_csv(arquivo, encoding=enc)
         except UnicodeDecodeError:
             continue
     arquivo.seek(0)
-    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python', dtype=str)
+    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
 
 
 def detectar_tipo_siaps(df, nome_arquivo=''):
@@ -125,8 +125,6 @@ def normalizar_colunas_cadastro(cad):
             ren[c] = 'Microárea'
         elif cl in ['equipe vínculo', 'equipe vinculo']:
             ren[c] = 'Equipe Vínculo'
-        elif cl in ['cpf']:
-            ren[c] = 'CPF'
     cad = cad.rename(columns=ren)
     cad = remover_colunas_duplicadas(cad)
     return cad
