@@ -14,16 +14,23 @@ def carregar_e_limpar(arquivo, eh_siaps=False):
     df.columns = [str(c).strip() for c in df.iloc[idx]]
     df = df.iloc[idx + 1:].reset_index(drop=True)
     
-    # Busca CPF e filtra apenas linhas válidas (remove legendas/rodapés)
     col_cpf = next((c for c in df.columns if 'CPF' in c.upper()), None)
     if col_cpf:
         df['CPF_key'] = normalizar_cpf(df[col_cpf])
-        # Filtro rígido para garantir que apenas CPFs reais fiquem (remove legendas)
+        # Filtro rígido para garantir que apenas CPFs reais fiquem
         df = df[df['CPF_key'].str.len() == 11]
         df = df[~df['CPF_key'].isin(['00000000000', ''])]
     return df
 
 st.title('🏥 Dashboard APS - Hipertensão')
+
+# Mapeamento de indicadores
+MAPA_INDICADORES = {
+    'A': 'A - Consultas',
+    'B': 'B - P.A.',
+    'C': 'C - Peso/Altura',
+    'D': 'D - Visitas'
+}
 
 with st.sidebar:
     st.header("Uploads")
@@ -39,7 +46,7 @@ if arq_siaps and arq_cad:
     
     df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
 
-    # Mapeamento
+    # Mapeamento para exibição
     def get_col(options):
         match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options)), None)
         return df_final[match] if match else ''
@@ -62,25 +69,32 @@ if arq_siaps and arq_cad:
         'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
     })
 
-    # --- Painel e Métricas ---
-    st.subheader('Painel de Monitoramento')
+    # --- Painel de Monitoramento de Boas Práticas ---
+    st.subheader('Monitoramento de Boas Práticas')
     total = len(df_lista)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric('Total de pacientes', total)
     
-    for i, ind in enumerate(['A', 'B', 'C', 'D']):
-        if ind in df_lista.columns:
-            count = df_lista[ind].astype(str).str.strip().str.upper().value_counts().get('X', 0)
+    for i, (key, label) in enumerate(MAPA_INDICADORES.items()):
+        if key in df_lista.columns:
+            count = df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)
             perc = (count / total) * 100 if total > 0 else 0
-            [c2, c3, c4, c5][i].metric(f'Indicador {ind}', f"{perc:.1f}%", f"{count} pacientes")
+            [c2, c3, c4, c5][i].metric(label, f"{perc:.1f}%", f"{count} pacientes")
 
     # --- Gráfico ---
-    st.subheader('Distribuição de Boas Práticas (Indicadores)')
-    dados = [{'Indicador': ind, 'Total': df_lista[ind].astype(str).str.strip().str.upper().value_counts().get('X', 0)} for ind in ['A', 'B', 'C', 'D']]
-    st.plotly_chart(px.bar(pd.DataFrame(dados), x='Indicador', y='Total', text='Total'), use_container_width=True)
+    st.subheader('Distribuição das Boas Práticas')
+    dados_grafico = []
+    for key, label in MAPA_INDICADORES.items():
+        if key in df_lista.columns:
+            total_x = df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)
+            dados_grafico.append({'Boas Práticas': label, 'Total': total_x})
+    
+    if dados_grafico:
+        fig = px.bar(pd.DataFrame(dados_grafico), x='Boas Práticas', y='Total', text='Total')
+        st.plotly_chart(fig, use_container_width=True)
 
-    # --- Tabela ---
     st.subheader('Lista Nominal Unificada')
     st.dataframe(df_lista, use_container_width=True)
 else:
     st.info('Por favor, envie ambas as planilhas para processar o dashboard.')
+```eof
