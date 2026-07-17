@@ -131,7 +131,14 @@ def carregar_base_cadastro(arquivo):
     nome = arquivo.name.lower()
     if nome.endswith(('.xlsx', '.xls')):
         return pd.read_excel(arquivo)
-    return pd.read_csv(arquivo)
+    for enc in ['utf-8', 'latin1', 'cp1252']:
+        try:
+            arquivo.seek(0)
+            return pd.read_csv(arquivo, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    arquivo.seek(0)
+    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
 
 
 def normalizar_cpf(serie):
