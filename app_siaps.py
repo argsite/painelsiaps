@@ -64,85 +64,74 @@ def detectar_linha_cuidado(df: pd.DataFrame, nome_arquivo: str = ""):
     return None, "indefinida"
 
 
-def detectar_tipo_siaps(df: pd.DataFrame, nome_arquivo: str = ""):
-    cols = {str(c).strip() for c in df.columns}
-    nome = (nome_arquivo or "").lower()
-    colunas_hipertensao_boas_praticas = {
-        "CPF", "CNS", "Nascimento", "Sexo", "Raça cor", "CNES", "INE",
-        "A", "B", "C", "D", "NM", "DN"
-    }
-    if colunas_hipertensao_boas_praticas.issubset(cols):
-        if "hipertens" in nome or "hipertensão" in nome or "hipertensao" in nome:
-            return "SIAPS_HIPERTENSAO_BOAS_PRATICAS"
-        return "SIAPS_HIPERTENSAO_BOAS_PRATICAS"
-    return None
 
 
-def exibir_cabecalho_analise(linha_cuidado: str, origem: str):
-    selo = "Detectado automaticamente" if origem == "automática" else "Definido manualmente"
-    st.markdown(
-        f"<div style='background:#f8fafc;border:1px solid #e5e7eb;border-radius:16px;padding:16px 18px;margin:8px 0 14px 0'><div style='font-size:0.82rem;color:#64748b;font-weight:600;letter-spacing:.02em;text-transform:uppercase;margin-bottom:6px'>Análise do relatório</div><div style='font-size:1.35rem;font-weight:700;color:#0f172a;margin-bottom:4px'>Linha de cuidado: {linha_cuidado}</div><div style='font-size:0.95rem;color:#475569'>{selo}</div></div>",
-        unsafe_allow_html=True,
-    )
+def carregar_base_cadastro(arquivo):
+    arquivo.seek(0)
+    nome = arquivo.name.lower()
+    if nome.endswith(('.xlsx', '.xls')):
+        return pd.read_excel(arquivo)
+    return pd.read_csv(arquivo)
 
 
-def exibirmetricascards(*cards):
-    html = ['<div class="metric-grid">']
-    for titulo, valor in cards:
-        html.append(
-            f'<div class="metric-card"><div class="metric-card-label">{titulo}</div><div class="metric-card-value">{valor}</div></div>'
-        )
-    html.append('</div>')
-    st.markdown(''.join(html), unsafe_allow_html=True)
+def normalizar_cpf(serie):
+    return serie.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
 
 
-def graficobarras(df, x, y, titulo, cor=None):
-    if df.empty:
-        st.info('Sem dados para exibir neste gráfico.')
-        return
-    fig = px.bar(df, x=x, y=y, title=titulo, color=cor)
-    fig.update_layout(margin=dict(l=10, r=10, t=60, b=10), xaxis_title=None, yaxis_title=None)
-    st.plotly_chart(fig, use_container_width=True)
+def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
+    siaps = df_siaps.copy()
+    cad = df_cadastro.copy()
 
+    if 'CPF' not in siaps.columns and 'CPF' not in cad.columns:
+        return siaps
 
-def dataframeparaexcelbytes(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Dados')
-    output.seek(0)
-    return output.getvalue()
+    if 'CPF' in siaps.columns:
+        siaps['CPF_norm'] = normalizar_cpf(siaps['CPF'])
+    else:
+        siaps['CPF_norm'] = ''
+    if 'CPF' in cad.columns:
+        cad['CPF_norm'] = normalizar_cpf(cad['CPF'])
+    else:
+        cad['CPF_norm'] = ''
 
+    cols_map = {}
+    for col in cad.columns:
+        c = str(col).strip().lower()
+        if c in ['nome completo', 'nome', 'paciente']:
+            cols_map[col] = 'Nome Completo'
+        elif c in ['endereço', 'endereco']:
+            cols_map[col] = 'Endereço'
+        elif c in ['equipe área', 'equipe area', 'equipe']:
+            cols_map[col] = 'Equipe Área'
+        elif c in ['microárea', 'microarea']:
+            cols_map[col] = 'Microárea'
+        elif c in ['equipe vínculo', 'equipe vinculo']:
+            cols_map[col] = 'Equipe Vínculo'
+    cad = cad.rename(columns=cols_map)
 
-def marcar_x(serie):
-    return serie.fillna('').astype(str).str.strip().str.upper().eq('X')
+    siaps['Fonte SIAPS'] = 'SIM'
+    cad['Fonte Complementar'] = 'SIM'
 
+    cols_siaps = [c for c in siaps.columns if c != 'CPF_norm']
+    cols_cad = [c for c in cad.columns if c != 'CPF_norm']
+    merged = siaps.merge(cad, on='CPF_norm', how='outer', suffixes=('_siaps', '_cad'), indicator=True)
 
-def traduzir_raca_cor(valor):
-    mapa = {
-        '1': 'Branca',
-        '2': 'Preta',
-        '3': 'Amarela',
-        '4': 'Parda',
-        '5': 'Indígena',
-        '6': 'Sem informação',
-    }
-    if pd.isna(valor):
-        return 'Sem informação'
-    chave = str(valor).strip()
-    return mapa.get(chave, chave)
+    merged['Encontrado na SIAPS'] = merged['_merge'].isin(['both', 'left_only'])
+    merged['Encontrado na complementar'] = merged['_merge'].isin(['both', 'right_only'])
 
+    for base_col in ['CPF', 'Nome Completo', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']:
+        si = f'{base_col}_siaps'
+        ca = f'{base_col}_cad'
+        if si in merged.columns and ca in merged.columns:
+            merged[base_col] = merged[si].combine_first(merged[ca])
+        elif si in merged.columns:
+            merged[base_col] = merged[si]
+        elif ca in merged.columns:
+            merged[base_col] = merged[ca]
 
-def montar_motivo_pendencia_siaps_hipertensao(row):
-    motivos = []
-    if row.get('pendencia_A', False):
-        motivos.append('Sem consulta em 6 meses')
-    if row.get('pendencia_B', False):
-        motivos.append('Sem aferição de PA em 6 meses')
-    if row.get('pendencia_C', False):
-        motivos.append('Sem peso e altura em 12 meses')
-    if row.get('pendencia_D', False):
-        motivos.append('Sem 2 visitas ACS/TACS em 12 meses')
-    return ' | '.join(motivos) if motivos else 'Sem pendências'
+    merged['Origem do registro'] = merged['_merge'].map({'both': 'SIAPS + Complementar', 'left_only': 'Apenas SIAPS', 'right_only': 'Apenas Complementar'})
+    merged = merged.drop(columns=['_merge', 'CPF_norm'], errors='ignore')
+    return merged
 
 
 def preparar_siaps_hipertensao_boas_praticas(df):
@@ -218,8 +207,33 @@ def calcular_metricas_siaps_hipertensao(df):
 
 def render_siaps_hipertensao_boas_praticas(df):
     df = preparar_siaps_hipertensao_boas_praticas(df)
-    m = calcular_metricas_siaps_hipertensao(df)
+    st.sidebar.header('Filtros da busca ativa')
+    filtrado = df.copy()
 
+    if 'Equipe' in filtrado.columns:
+        eq_opts = ['Todas'] + sorted([x for x in filtrado['Equipe'].dropna().astype(str).str.strip().unique().tolist() if x])
+        eq_sel = st.sidebar.selectbox('Equipe', eq_opts, index=0)
+        if eq_sel != 'Todas':
+            filtrado = filtrado[filtrado['Equipe'].astype(str).str.strip() == eq_sel]
+
+    if 'Microárea' in filtrado.columns:
+        mi_opts = ['Todas'] + sorted([x for x in filtrado['Microárea'].dropna().astype(str).str.strip().unique().tolist() if x])
+        mi_sel = st.sidebar.selectbox('Microárea', mi_opts, index=0)
+        if mi_sel != 'Todas':
+            filtrado = filtrado[filtrado['Microárea'].astype(str).str.strip() == mi_sel]
+
+    faixas = {'Todas': None, '0-17': (0, 17), '18-39': (18, 39), '40-59': (40, 59), '60+': (60, 200)}
+    faixa_sel = st.sidebar.selectbox('Faixa etária', list(faixas.keys()), index=0)
+    if faixa_sel != 'Todas' and 'Idade' in filtrado.columns:
+        mn, mx = faixas[faixa_sel]
+        filtrado = filtrado[pd.to_numeric(filtrado['Idade'], errors='coerce').between(mn, mx, inclusive='both')]
+
+    pend_sel = st.sidebar.selectbox('Pendência de boas práticas', ['Todas', 'A - Consulta', 'B - PA', 'C - Peso/altura', 'D - Visitas ACS'], index=0)
+    if pend_sel != 'Todas':
+        mapa = {'A - Consulta': 'pendencia_A', 'B - PA': 'pendencia_B', 'C - Peso/altura': 'pendencia_C', 'D - Visitas ACS': 'pendencia_D'}
+        filtrado = filtrado[filtrado[mapa[pend_sel]]]
+
+    m = calcular_metricas_siaps_hipertensao(filtrado)
     exibirmetricascards(
         ('Total de pacientes', m['total_pacientes']),
         ('Denominador', m['denominador']),
@@ -240,8 +254,16 @@ def render_siaps_hipertensao_boas_praticas(df):
         'Pendentes': [m['pend_a'], m['pend_b'], m['pend_c'], m['pend_d']],
     })
 
+    st.subheader('Lista nominal SIAPS')
+    st.dataframe(filtrado, use_container_width=True)
+
+    if 'Encontrado na base complementar' in filtrado.columns:
+        st.subheader('Base complementar cruzada')
+        st.dataframe(filtrado, use_container_width=True)
+
     st.subheader('Cobertura das boas práticas')
     graficobarras(cobertura, 'Boa prática', 'Cumpridos', 'Boas práticas cumpridas - Hipertensão SIAPS')
+
 
     st.subheader('Lista nominal de pendências')
     somente_pendentes = st.checkbox(
@@ -273,7 +295,8 @@ def render_siaps_hipertensao_boas_praticas(df):
     st.dataframe(lista[colunas_saida], use_container_width=True)
 
 
-arquivo = file_uploader_compat('Envie a planilha correspondente', type=['xlsx', 'xls', 'csv'])
+arquivo_siaps = file_uploader_compat('Envie a planilha SIAPS', type=['xlsx', 'xls', 'csv'])
+arquivo_cadastro = file_uploader_compat('Envie a base cadastral para cruzamento', type=['xlsx', 'xls', 'csv'])
 
 with st.expander('Como usar'):
     st.markdown(
@@ -285,27 +308,33 @@ with st.expander('Como usar'):
         """
     )
 
-if arquivo is None:
+if arquivo_siaps is None:
     st.info('Aguardando upload da planilha.')
 else:
     try:
         tipo_siaps = None
         df_siaps = None
 
-        if arquivo.name.lower().endswith(('.xlsx', '.xls')):
-            arquivo.seek(0)
+        if arquivo_siaps.name.lower().endswith(('.xlsx', '.xls')):
+            arquivo_siaps.seek(0)
             try:
-                df_siaps = pd.read_excel(arquivo, header=17)
-                tipo_siaps = detectar_tipo_siaps(df_siaps, arquivo.name)
+                df_siaps = pd.read_excel(arquivo_siaps, header=17)
+                tipo_siaps = detectar_tipo_siaps(df_siaps, arquivo_siaps.name)
             except Exception as e:
                 st.warning(f'Falha ao tentar ler como SIAPS: {e}')
                 tipo_siaps = None
 
         if tipo_siaps == 'SIAPS_HIPERTENSAO_BOAS_PRATICAS':
+            if arquivo_cadastro is not None:
+                try:
+                    df_cadastro = carregar_base_cadastro(arquivo_cadastro)
+                    df_siaps = cruzar_siaps_com_cadastro(df_siaps, df_cadastro)
+                except Exception as e:
+                    st.warning(f'Não foi possível cruzar a base cadastral: {e}')
             exibir_cabecalho_analise('Hipertensão - Boas Práticas SIAPS', 'automática')
             render_siaps_hipertensao_boas_praticas(df_siaps)
         else:
-            arquivo.seek(0)
+            arquivo_siaps.seek(0)
             df = carregar_planilha_generica(arquivo)
             linhadetectada, origem = detectar_linha_cuidado(df, arquivo.name)
             if linhadetectada is None:
