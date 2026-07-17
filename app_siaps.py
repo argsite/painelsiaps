@@ -268,11 +268,29 @@ def main():
     for c in cols:
         if c not in vis.columns: vis[c] = ''
 
-    st.subheader('Lista Nominal SIAPS')
-    vis = remover_colunas_duplicadas(vis)
-    vis = vis.loc[:, [c for i, c in enumerate(cols) if c in vis.columns and c not in cols[:i]]].copy()
-    st.dataframe(remover_colunas_duplicadas(vis), use_container_width=True)
-    st.caption(f'Total após filtros: {len(vis)}')
+    
+        st.subheader('Painel de monitoramento')
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric('Total de pacientes', len(merged))
+        c2.metric('A', m.get('A', 0))
+        c3.metric('B', m.get('B', 0))
+        c4.metric('C', m.get('C', 0))
+        c5, c6 = st.columns(2)
+        with c5:
+            barra(pd.DataFrame({'Indicador': ['A', 'B', 'C', 'D'], 'Quantidade': [m.get('A', 0), m.get('B', 0), m.get('C', 0), m.get('D', 0)]}), 'Indicador', 'Quantidade', 'Boas práticas')
+        with c6:
+            if 'Idade' in merged.columns:
+                idade_df = merged.copy()
+                idade_df['Faixa etária'] = pd.to_numeric(idade_df['Idade'], errors='coerce').fillna(-1).apply(lambda x: 'Ignorado' if x < 0 else ('0-17' if x <= 17 else '18-39' if x <= 39 else '40-59' if x <= 59 else '60+'))
+                faixa_df = idade_df['Faixa etária'].value_counts().reset_index()
+                faixa_df.columns = ['Faixa etária', 'Quantidade']
+                barra(faixa_df, 'Faixa etária', 'Quantidade', 'Faixa etária')
+
+st.subheader('Lista Nominal SIAPS')
+vis = remover_colunas_duplicadas(vis)
+vis = vis.loc[:, [c for i, c in enumerate(cols) if c in vis.columns and c not in cols[:i]]].copy()
+st.dataframe(remover_colunas_duplicadas(vis), use_container_width=True)
+st.caption(f'Total após filtros: {len(vis)}')
 
 
 if __name__ == '__main__':
