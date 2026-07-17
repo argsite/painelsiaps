@@ -190,8 +190,11 @@ def carregar_siaps_bruto(arquivo):
         try:
             return pd.read_excel(arquivo, header=None)
         except Exception:
-            arquivo.seek(0)
-            return pd.read_csv(arquivo, header=None, encoding='latin1')
+            try:
+                arquivo.seek(0)
+                return pd.read_csv(arquivo, header=None, encoding='latin1')
+            except Exception:
+                pass
     for enc in ['utf-8', 'latin1', 'cp1252']:
         try:
             arquivo.seek(0)
@@ -200,6 +203,19 @@ def carregar_siaps_bruto(arquivo):
             continue
     arquivo.seek(0)
     return pd.read_csv(arquivo, header=None, encoding='latin1')
+
+def extrair_siaps_hipertensao(arquivo):
+    bruto = carregar_siaps_bruto(arquivo)
+    if bruto.empty:
+        return pd.DataFrame()
+    for i in range(min(len(bruto), 40)):
+        vals = ' '.join(bruto.iloc[i].fillna('').astype(str).tolist()).lower()
+        if 'cpf' in vals and 'cns' in vals and 'nascimento' in vals and 'sexo' in vals and 'a' in vals and 'b' in vals and 'c' in vals and 'd' in vals:
+            dados = bruto.iloc[i+1:].copy()
+            dados.columns = [str(x).strip() for x in bruto.iloc[i].tolist()]
+            dados = dados.dropna(how='all')
+            return dados
+    return bruto
 
 def detectar_tipo_siaps(df, nome_arquivo=''):
     cols = {str(c).strip().lower() for c in df.columns}
@@ -215,7 +231,7 @@ def main():
         return
 
     try:
-        df_siaps = carregar_siaps_bruto(arq_siaps)
+        df_siaps = extrair_siaps_hipertensao(arq_siaps)
         df_siaps.columns = [str(c).strip() for c in df_siaps.columns]
         df_siaps = limpar_siaps_hipertensao(df_siaps)
         tipo = detectar_tipo_siaps(df_siaps, arq_siaps.name)
