@@ -34,6 +34,66 @@ def file_uploader_compat(label, type=None):
 
 
 
+
+
+def marcar_x(serie):
+    return serie.fillna('').astype(str).str.strip().str.upper().eq('X')
+
+
+def traduzir_raca_cor(valor):
+    mapa = {'1': 'Branca', '2': 'Preta', '3': 'Amarela', '4': 'Parda', '5': 'Indígena', '6': 'Sem informação'}
+    chave = str(valor).strip()
+    return mapa.get(chave, valor)
+
+
+def montar_motivo_pendencia_siaps_hipertensao(linha):
+    motivos = []
+    if linha.get('pendencia_A', False):
+        motivos.append('Sem consulta')
+    if linha.get('pendencia_B', False):
+        motivos.append('Sem PA')
+    if linha.get('pendencia_C', False):
+        motivos.append('Sem peso/altura')
+    if linha.get('pendencia_D', False):
+        motivos.append('Sem visitas ACS')
+    return '; '.join(motivos)
+
+
+def exibirmetricascards(*cards):
+    cols = st.columns(len(cards)) if cards else []
+    for col, (rotulo, valor) in zip(cols, cards):
+        col.metric(rotulo, valor)
+
+
+def graficobarras(df, x, y, titulo):
+    fig = px.bar(df, x=x, y=y, title=titulo, text=y)
+    fig.update_traces(textposition='outside')
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def dataframeparaexcelbytes(df):
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    return buffer.getvalue()
+
+
+def exibir_cabecalho_analise(linha_cuidado: str, origem: str):
+    selo = 'Detectado automaticamente' if origem == 'automática' else 'Definido manualmente'
+    st.subheader(linha_cuidado)
+    st.caption(selo)
+
+
+def detectar_tipo_siaps(df: pd.DataFrame, nome_arquivo: str = ''):
+    colunas = {str(c).strip().lower() for c in df.columns}
+    esperadas = {'cpf', 'cns', 'nascimento', 'sexo', 'raça cor', 'cnes', 'ine', 'a', 'b', 'c', 'd', 'nm', 'dn'}
+    if esperadas.issubset(colunas):
+        return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
+    nome = (nome_arquivo or '').lower()
+    if 'hipertens' in nome and {'a', 'b', 'c', 'd', 'nm', 'dn'}.issubset(colunas):
+        return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
+    return None
+
 def carregar_planilha_generica(arquivo):
     nome = arquivo.name.lower()
     arquivo.seek(0)
@@ -257,7 +317,7 @@ def render_siaps_hipertensao_boas_praticas(df):
     st.subheader('Lista nominal SIAPS')
     st.dataframe(filtrado, use_container_width=True)
 
-    if 'Encontrado na base complementar' in filtrado.columns:
+    if 'Encontrado na complementar' in filtrado.columns:
         st.subheader('Base complementar cruzada')
         st.dataframe(filtrado, use_container_width=True)
 
@@ -335,8 +395,8 @@ else:
             render_siaps_hipertensao_boas_praticas(df_siaps)
         else:
             arquivo_siaps.seek(0)
-            df = carregar_planilha_generica(arquivo)
-            linhadetectada, origem = detectar_linha_cuidado(df, arquivo.name)
+            df = carregar_planilha_generica(arquivo_siaps)
+            linhadetectada, origem = detectar_linha_cuidado(df, arquivo_siaps.name)
             if linhadetectada is None:
                 st.warning('Não foi possível identificar automaticamente a linha de cuidado. Escolha manualmente abaixo.')
                 secao = st.radio('Linha de cuidado', ['Hipertensão', 'Diabetes'], horizontal=True, key='linhamanualprincipal')
