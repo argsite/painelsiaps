@@ -3,6 +3,11 @@ import pandas as pd
 from io import BytesIO
 import plotly.express as px
 
+
+
+def remover_colunas_duplicadas(df):
+    return df.loc[:, ~pd.Index(df.columns).duplicated(keep='first')].copy()
+
 st.set_page_config(layout='wide', page_title='Dashboard APS - Hipertensão')
 
 st.title('Dashboard APS - Hipertensão')
@@ -112,6 +117,7 @@ def normalizar_colunas_cadastro(cad):
         elif cl in ['equipe vínculo', 'equipe vinculo']:
             ren[c] = 'Equipe Vínculo'
     cad = cad.rename(columns=ren)
+    cad = remover_colunas_duplicadas(cad)
     return cad
 
 
@@ -140,6 +146,7 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
             merged[col] = merged[f'{col}_cad']
     merged['Origem'] = merged['_merge'].map({'both': 'SIAPS + Complementar', 'left_only': 'Apenas SIAPS', 'right_only': 'Apenas Complementar'})
     merged = merged.drop(columns=['_merge', 'CPF_norm'], errors='ignore')
+    merged = remover_colunas_duplicadas(merged)
     return merged
 
 
@@ -200,6 +207,7 @@ def main():
         header = [str(x).strip() for x in bruto.iloc[header_idx].tolist()]
         dados = bruto.iloc[header_idx+1:].copy()
         dados.columns = header
+        dados = remover_colunas_duplicadas(dados)
         return dados
 
     df_siaps = carregar_siaps_bruto(arq_siaps)
@@ -226,6 +234,7 @@ def main():
     faixa = st.sidebar.selectbox('Faixa etária', ['Todas', '0-17', '18-39', '40-59', '60+'])
     pend = st.sidebar.selectbox('Pendência', ['Todas', 'A', 'B', 'C', 'D'])
 
+    merged = remover_colunas_duplicadas(merged)
     vis = merged.copy()
     if view == 'Somente em comum': vis = vis[vis['Encontrado na SIAPS'] & vis['Encontrado na Complementar']]
     elif view == 'Somente SIAPS': vis = vis[vis['Encontrado na SIAPS'] & ~vis['Encontrado na Complementar']]
@@ -249,7 +258,9 @@ def main():
         if c not in vis.columns: vis[c] = ''
 
     st.subheader('Lista Nominal SIAPS')
-    st.dataframe(vis[cols], use_container_width=True)
+    vis = remover_colunas_duplicadas(vis)
+    vis = vis.loc[:, [c for i, c in enumerate(cols) if c in vis.columns and c not in cols[:i]]].copy()
+    st.dataframe(vis, use_container_width=True)
     st.caption(f'Total após filtros: {len(vis)}')
 
 
