@@ -134,32 +134,41 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
     siaps = deduplicar_por_cpf(df_siaps.copy())
     cad = normalizar_colunas_cadastro(df_cadastro.copy())
     cad = deduplicar_por_cpf(cad)
+
     siaps['CPF_norm'] = normalizar_cpf(siaps['CPF']) if 'CPF' in siaps.columns else ''
     cad['CPF_norm'] = normalizar_cpf(cad['CPF']) if 'CPF' in cad.columns else ''
-    keep = ['CPF_norm'] + [c for c in ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo'] if c in cad.columns]
-    cad = cad[keep].drop_duplicates('CPF_norm') if 'CPF_norm' in cad.columns else cad
-    merged = siaps.merge(cad, on='CPF_norm', how='outer', suffixes=('_siaps', '_cad'), indicator=True)
-    merged = deduplicar_por_cpf(merged)
-    merged['Encontrado na SIAPS'] = merged['_merge'].isin(['both', 'left_only'])
-    merged['Encontrado na Complementar'] = merged['_merge'].isin(['both', 'right_only'])
-    if 'Nome Completo_cad' in merged.columns:
-        merged['Nome Completo'] = merged['Nome Completo_cad']
-    elif 'Nome Completo_siaps' in merged.columns:
-        merged['Nome Completo'] = merged['Nome Completo_siaps']
-    if 'Data de Nascimento_cad' in merged.columns:
-        merged['Data de Nascimento'] = merged['Data de Nascimento_cad']
-    if 'CNS_cad' in merged.columns:
-        merged['CNS'] = merged['CNS_cad']
-    if 'Idade' not in merged.columns and 'Idade_cad' in merged.columns:
-        merged['Idade'] = merged['Idade_cad']
-    for col in ['Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']:
-        if f'{col}_cad' in merged.columns:
-            merged[col] = merged[f'{col}_cad']
-    merged['Origem'] = merged['_merge'].map({'both': 'SIAPS + Complementar', 'left_only': 'Apenas SIAPS', 'right_only': 'Apenas Complementar'})
-    merged = merged.drop(columns=['_merge', 'CPF_norm'], errors='ignore')
+
+    cad_cols = ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']
+    cad = cad[['CPF_norm'] + [c for c in cad_cols if c in cad.columns]].drop_duplicates('CPF_norm') if 'CPF_norm' in cad.columns else cad
+
+    merged = siaps.merge(cad, on='CPF_norm', how='left', suffixes=('_siaps', '_cad'))
+    merged['_match_complementar'] = merged['CPF_norm'].isin(cad['CPF_norm']) if 'CPF_norm' in cad.columns else False
+
+    priority = {
+        'Nome Completo': ['Nome Completo_cad', 'Nome Completo_siaps'],
+        'CNS': ['CNS_cad', 'CNS_siaps'],
+        'Data de Nascimento': ['Data de Nascimento_cad', 'Data de Nascimento_siaps'],
+        'Idade': ['Idade_cad', 'Idade_siaps'],
+        'Endereço': ['Endereço_cad', 'Endereço_siaps'],
+        'Equipe Área': ['Equipe Área_cad', 'Equipe Área_siaps'],
+        'Microárea': ['Microárea_cad', 'Microárea_siaps'],
+        'Equipe Vínculo': ['Equipe Vínculo_cad', 'Equipe Vínculo_siaps'],
+        'Sexo': ['Sexo_siaps'],
+        'Raça': ['Raça_siaps']
+    }
+
+    for out_col, sources in priority.items():
+        merged[out_col] = pd.NA
+        for src in sources:
+            if src in merged.columns:
+                merged[out_col] = merged[out_col].combine_first(merged[src])
+
+    merged['Encontrado na SIAPS'] = True
+    merged['Encontrado na Complementar'] = merged['_match_complementar']
+    merged['Origem'] = merged['_match_complementar'].map({True: 'SIAPS + Complementar', False: 'Apenas SIAPS'})
+    merged = merged.drop(columns=['CPF_norm', '_match_complementar'], errors='ignore')
     merged = remover_colunas_duplicadas(merged)
     return merged
-
 
 def contar_boas_praticas(df):
     m = {}
