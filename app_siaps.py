@@ -36,15 +36,15 @@ def carregar_planilha_generica(arquivo):
     nome = arquivo.name.lower()
     arquivo.seek(0)
     if nome.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(arquivo)
+        return pd.read_excel(arquivo, dtype=str)
     for enc in ['utf-8', 'latin1', 'cp1252']:
         try:
             arquivo.seek(0)
-            return pd.read_csv(arquivo, encoding=enc)
+            return pd.read_csv(arquivo, encoding=enc, dtype=str)
         except UnicodeDecodeError:
             continue
     arquivo.seek(0)
-    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
+    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python', dtype=str)
 
 
 def detectar_tipo_siaps(df, nome_arquivo=''):
@@ -58,21 +58,15 @@ def detectar_tipo_siaps(df, nome_arquivo=''):
 
 def limpar_siaps_hipertensao(df):
     df = df.copy()
-    if 'CPF' not in df.columns:
-        return df
-    cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True)
-    df = df[df['CPF'].isna() | cpf.str.len().eq(11)].copy()
-    df['CPF'] = cpf.loc[df.index]
+    if 'CPF' in df.columns:
+        cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True)
+        df = df[df['CPF'].isna() | cpf.str.len().eq(11)]
+    df['CPF'] = cpf
     return df
 
 
 def normalizar_cpf(s):
-    s = s.fillna('').astype(str).str.upper().str.strip()
-    s = s.str.replace(r'\.0$', '', regex=True)
-    s = s.str.replace(r'\D+', '', regex=True)
-    s = s.replace('', pd.NA)
-    s = pd.to_numeric(s, errors='coerce').dropna().astype('Int64').astype(str)
-    return s.str.zfill(11) if isinstance(s, pd.Series) else s
+    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
 
 
 def preparar_siaps_hipertensao_boas_praticas(df):
@@ -102,11 +96,11 @@ def carregar_base_cadastro(arquivo):
     nome = arquivo.name.lower()
     if nome.endswith(('.xlsx', '.xls')):
         return pd.read_excel(arquivo)
-    for enc in ['latin1', 'cp1252', 'utf-8-sig', 'utf-8']:
+    for enc in ['utf-8', 'latin1', 'cp1252']:
         try:
             arquivo.seek(0)
             return pd.read_csv(arquivo, encoding=enc)
-        except Exception:
+        except UnicodeDecodeError:
             continue
     arquivo.seek(0)
     return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
@@ -131,6 +125,8 @@ def normalizar_colunas_cadastro(cad):
             ren[c] = 'Microárea'
         elif cl in ['equipe vínculo', 'equipe vinculo']:
             ren[c] = 'Equipe Vínculo'
+        elif cl in ['cpf']:
+            ren[c] = 'CPF'
     cad = cad.rename(columns=ren)
     cad = remover_colunas_duplicadas(cad)
     return cad
@@ -140,24 +136,29 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
     siaps = deduplicar_por_cpf(df_siaps.copy())
     cad = normalizar_colunas_cadastro(df_cadastro.copy())
     cad = deduplicar_por_cpf(cad)
-    siaps['CPF_norm'] = normalizar_cpf(siaps['CPF']) if 'CPF' in siaps.columns else pd.NA
-    cad['CPF_norm'] = normalizar_cpf(cad['CPF']) if 'CPF' in cad.columns else pd.NA
-    siaps = siaps[siaps['CPF_norm'].notna()].copy() if 'CPF_norm' in siaps.columns else siaps
-    cad = cad[cad['CPF_norm'].notna()].copy() if 'CPF_norm' in cad.columns else cad
-    merged = siaps.merge(cad, on='CPF_norm', how='left', suffixes=('_siaps', '_cad'))
-    merged['Encontrado na SIAPS'] = True
-    merged['Encontrado na Complementar'] = merged['CPF_norm'].isin(cad['CPF_norm']) if 'CPF_norm' in cad.columns else False
-    for col in ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']:
-        cad_col = f'{col}_cad'
-        siaps_col = f'{col}_siaps'
-        if cad_col in merged.columns:
-            merged[col] = merged[cad_col].where(merged[cad_col].notna() & (merged[cad_col].astype(str).str.strip() != ''), pd.NA)
-        else:
-            merged[col] = pd.NA
-        if siaps_col in merged.columns:
-            merged[col] = merged[col].combine_first(merged[siaps_col])
-    merged['Origem'] = merged['Encontrado na Complementar'].map({True: 'SIAPS + Complementar', False: 'Apenas SIAPS'})
-    merged = merged.drop(columns=['CPF_norm'], errors='ignore')
+    siaps['CPF_norm'] = normalizar_cpf(siaps['CPF']) if 'CPF' in siaps.columns else ''
+    cad['CPF_norm'] = normalizar_cpf(cad['CPF']) if 'CPF' in cad.columns else ''
+    keep = ['CPF_norm'] + [c for c in ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo'] if c in cad.columns]
+    cad = cad[keep].drop_duplicates('CPF_norm') if 'CPF_norm' in cad.columns else cad
+    merged = siaps.merge(cad, on='CPF_norm', how='outer', suffixes=('_siaps', '_cad'), indicator=True)
+    merged = deduplicar_por_cpf(merged)
+    merged['Encontrado na SIAPS'] = merged['_merge'].isin(['both', 'left_only'])
+    merged['Encontrado na Complementar'] = merged['_merge'].isin(['both', 'right_only'])
+    if 'Nome Completo_cad' in merged.columns:
+        merged['Nome Completo'] = merged['Nome Completo_cad']
+    elif 'Nome Completo_siaps' in merged.columns:
+        merged['Nome Completo'] = merged['Nome Completo_siaps']
+    if 'Data de Nascimento_cad' in merged.columns:
+        merged['Data de Nascimento'] = merged['Data de Nascimento_cad']
+    if 'CNS_cad' in merged.columns:
+        merged['CNS'] = merged['CNS_cad']
+    if 'Idade' not in merged.columns and 'Idade_cad' in merged.columns:
+        merged['Idade'] = merged['Idade_cad']
+    for col in ['Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']:
+        if f'{col}_cad' in merged.columns:
+            merged[col] = merged[f'{col}_cad']
+    merged['Origem'] = merged['_merge'].map({'both': 'SIAPS + Complementar', 'left_only': 'Apenas SIAPS', 'right_only': 'Apenas Complementar'})
+    merged = merged.drop(columns=['_merge', 'CPF_norm'], errors='ignore')
     merged = remover_colunas_duplicadas(merged)
     return merged
 
