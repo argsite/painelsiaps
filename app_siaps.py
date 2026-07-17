@@ -60,7 +60,8 @@ def limpar_siaps_hipertensao(df):
     df = df.copy()
     if 'CPF' not in df.columns:
         return df
-    cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
+    cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True)
+    cpf = cpf.str.zfill(11)
     df = df[df['CPF'].isna() | cpf.str.len().eq(11)].copy()
     df['CPF'] = cpf.loc[df.index]
     return df
@@ -181,6 +182,32 @@ def exibir_card(l1, v1, l2=None, v2=None):
         cols[1].metric(l2, v2)
 
 
+
+def carregar_siaps_bruto(arquivo):
+    nome = arquivo.name.lower()
+    arquivo.seek(0)
+    if nome.endswith(('.xlsx', '.xls')):
+        try:
+            return pd.read_excel(arquivo, header=None)
+        except Exception:
+            arquivo.seek(0)
+            return pd.read_csv(arquivo, header=None, encoding='latin1')
+    for enc in ['utf-8', 'latin1', 'cp1252']:
+        try:
+            arquivo.seek(0)
+            return pd.read_csv(arquivo, header=None, encoding=enc)
+        except Exception:
+            continue
+    arquivo.seek(0)
+    return pd.read_csv(arquivo, header=None, encoding='latin1')
+
+def detectar_tipo_siaps(df, nome_arquivo=''):
+    cols = {str(c).strip().lower() for c in df.columns}
+    if {'cpf', 'cns', 'nascimento', 'sexo', 'raça cor', 'cnes', 'ine', 'a', 'b', 'c', 'd', 'nm', 'dn'}.issubset(cols):
+        return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
+    if 'hipertens' in (nome_arquivo or '').lower() and {'cpf', 'cns', 'a', 'b', 'c', 'd'}.issubset(cols):
+        return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
+    return None
 def main():
     arq_siaps = file_uploader_compat('Envie a planilha SIAPS', type=['csv','xlsx','xls'])
     if arq_siaps is None:
