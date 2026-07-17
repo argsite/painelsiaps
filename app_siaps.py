@@ -1,268 +1,69 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-import plotly.express as px
+import folium
+from streamlit_folium import st_folium
+import geopandas as gpd
 
+# Configuração da página
+st.set_page_config(layout="wide", page_title="Mapa de Saúde Territorial")
 
+st.title("📍 Dashboard de Saúde - Rastreamento Territorial")
+st.markdown("Faça o upload da sua planilha para visualizar os pacientes no mapa.")
 
-def remover_colunas_duplicadas(df):
-    return df.loc[:, ~pd.Index(df.columns).duplicated(keep='first')].copy()
+# 1. Upload do arquivo
+uploaded_file = st.file_uploader("Escolha sua planilha (Excel ou CSV)", type=["xlsx", "csv"])
 
-st.set_page_config(layout='wide', page_title='Dashboard APS - Hipertensão')
+if uploaded_file:
+    # Carregar dados
+    if uploaded_file.name.endswith('.xlsx'):
+        df = pd.read_excel(uploaded_file)
+    else:
+        df = pd.read_csv(uploaded_file)
+    
+    st.write("### Dados Carregados:")
+    st.dataframe(df.head())
 
-st.title('Dashboard APS - Hipertensão')
-st.caption('Lista nominal SIAPS unificada com a base complementar e filtros de busca ativa.')
+    # Seleção de colunas (para o usuário mapear o que é o quê)
+    cols = df.columns.tolist()
+    lat_col = st.selectbox("Selecione a coluna de Latitude", cols, index=None)
+    lon_col = st.selectbox("Selecione a coluna de Longitude", cols, index=None)
+    area_col = st.selectbox("Selecione a coluna de Microárea (para cores)", cols, index=None)
 
-
-def file_uploader_compat(label, type=None):
-    kwargs = {}
-    if type is not None:
-        kwargs['type'] = type
-    try:
-        return st.file_uploader(label, **kwargs)
-    except AttributeError:
-        return st.sidebar.file_uploader(label, **kwargs)
-
-
-def carregar_planilha_generica(arquivo):
-    nome = arquivo.name.lower()
-    arquivo.seek(0)
-    if nome.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(arquivo)
-    for enc in ['utf-8', 'latin1', 'cp1252']:
-        try:
-            arquivo.seek(0)
-            return pd.read_csv(arquivo, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-    arquivo.seek(0)
-    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
-
-
-def detectar_tipo_siaps(df, nome_arquivo=''):
-    cols = {str(c).strip().lower() for c in df.columns}
-    if {'cpf', 'cns', 'nascimento', 'sexo', 'raça cor', 'cnes', 'ine', 'a', 'b', 'c', 'd', 'nm', 'dn'}.issubset(cols):
-        return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
-    if 'hipertens' in (nome_arquivo or '').lower() and {'cpf', 'cns', 'a', 'b', 'c', 'd'}.issubset(cols):
-        return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
-    return None
-
-
-def limpar_siaps_hipertensao(df):
-    df = df.copy()
-    if 'CPF' in df.columns:
-        cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True)
-        df = df[df['CPF'].isna() | cpf.str.len().eq(11)]
-    return df
-
-
-def normalizar_cpf(s):
-    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
-
-
-def preparar_siaps_hipertensao_boas_praticas(df):
-    df = df.copy()
-    rename = {}
-    for c in df.columns:
-        cl = str(c).strip().lower()
-        if cl == 'nascimento':
-            rename[c] = 'Data de Nascimento'
-        elif cl in ['raça cor', 'raca cor']:
-            rename[c] = 'Raça'
-    df = df.rename(columns=rename)
-    for col in ['A', 'B', 'C', 'D']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip().str.upper().eq('X')
-    for col in ['NM', 'DN']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip().str.upper().eq('X')
-    for col in ['A', 'B', 'C', 'D', 'NM', 'DN']:
-        if col in df.columns:
-            df[f'pendencia_{col}'] = ~df[col].fillna(False).astype(bool)
-    return df
-
-
-def carregar_base_cadastro(arquivo):
-    arquivo.seek(0)
-    nome = arquivo.name.lower()
-    if nome.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(arquivo)
-    for enc in ['utf-8', 'latin1', 'cp1252']:
-        try:
-            arquivo.seek(0)
-            return pd.read_csv(arquivo, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-    arquivo.seek(0)
-    return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
-
-
-def normalizar_colunas_cadastro(cad):
-    cad = cad.copy()
-    ren = {}
-    for c in cad.columns:
-        cl = str(c).strip().lower()
-        if cl in ['nome completo', 'nome', 'paciente']:
-            ren[c] = 'Nome Completo'
-        elif cl in ['cns']:
-            ren[c] = 'CNS'
-        elif cl in ['data nascimento', 'data de nascimento', 'nascimento']:
-            ren[c] = 'Data de Nascimento'
-        elif cl in ['endereço', 'endereco']:
-            ren[c] = 'Endereço'
-        elif cl in ['equipe área', 'equipe area']:
-            ren[c] = 'Equipe Área'
-        elif cl in ['microárea', 'microarea']:
-            ren[c] = 'Microárea'
-        elif cl in ['equipe vínculo', 'equipe vinculo']:
-            ren[c] = 'Equipe Vínculo'
-    cad = cad.rename(columns=ren)
-    cad = remover_colunas_duplicadas(cad)
-    return cad
-
-
-def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
-    siaps = df_siaps.copy()
-    cad = normalizar_colunas_cadastro(df_cadastro.copy())
-    siaps['CPF_norm'] = normalizar_cpf(siaps['CPF']) if 'CPF' in siaps.columns else ''
-    cad['CPF_norm'] = normalizar_cpf(cad['CPF']) if 'CPF' in cad.columns else ''
-    keep = ['CPF_norm'] + [c for c in ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo'] if c in cad.columns]
-    cad = cad[keep].drop_duplicates('CPF_norm') if 'CPF_norm' in cad.columns else cad
-    merged = siaps.merge(cad, on='CPF_norm', how='outer', suffixes=('_siaps', '_cad'), indicator=True)
-    merged['Encontrado na SIAPS'] = merged['_merge'].isin(['both', 'left_only'])
-    merged['Encontrado na Complementar'] = merged['_merge'].isin(['both', 'right_only'])
-    if 'Nome Completo_cad' in merged.columns:
-        merged['Nome Completo'] = merged['Nome Completo_cad']
-    elif 'Nome Completo_siaps' in merged.columns:
-        merged['Nome Completo'] = merged['Nome Completo_siaps']
-    if 'Data de Nascimento_cad' in merged.columns:
-        merged['Data de Nascimento'] = merged['Data de Nascimento_cad']
-    if 'CNS_cad' in merged.columns:
-        merged['CNS'] = merged['CNS_cad']
-    if 'Idade' not in merged.columns and 'Idade_cad' in merged.columns:
-        merged['Idade'] = merged['Idade_cad']
-    for col in ['Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']:
-        if f'{col}_cad' in merged.columns:
-            merged[col] = merged[f'{col}_cad']
-    merged['Origem'] = merged['_merge'].map({'both': 'SIAPS + Complementar', 'left_only': 'Apenas SIAPS', 'right_only': 'Apenas Complementar'})
-    merged = merged.drop(columns=['_merge', 'CPF_norm'], errors='ignore')
-    merged = remover_colunas_duplicadas(merged)
-    return merged
-
-
-def contar_boas_praticas(df):
-    m = {}
-    for k in ['A', 'B', 'C', 'D']:
-        m[k] = int(df.get(k, pd.Series(dtype=bool)).fillna(False).astype(bool).sum()) if k in df.columns else 0
-    return m
-
-
-def barra(df, x, y, title):
-    fig = px.bar(df, x=x, y=y, title=title, text=y)
-    fig.update_traces(textposition='outside')
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def exibir_card(l1, v1, l2=None, v2=None):
-    cols = st.columns(2 if l2 is not None else 1)
-    cols[0].metric(l1, v1)
-    if l2 is not None:
-        cols[1].metric(l2, v2)
-
-
-def main():
-    arq_siaps = file_uploader_compat('Envie a planilha SIAPS', type=['csv','xlsx','xls'])
-    arq_cad = file_uploader_compat('Envie a planilha complementar', type=['csv','xlsx','xls'])
-    if arq_siaps is None or arq_cad is None:
-        st.info('Envie as duas planilhas para iniciar.')
-        return
-
-    def carregar_siaps_bruto(arquivo):
-        nome = arquivo.name.lower()
-        if nome.endswith(('.xlsx', '.xls')):
-            arquivo.seek(0)
-            bruto = pd.read_excel(arquivo, header=None)
+    if st.button("Gerar Mapa"):
+        if lat_col and lon_col:
+            # Centro do mapa (Porto Feliz)
+            mapa = folium.Map(location=[-23.218, -47.520], zoom_start=14)
+            
+            # Cores dinâmicas para microáreas
+            cores = ['red', 'blue', 'green', 'purple', 'orange', 'darkred']
+            
+            # Adicionar marcadores
+            for i, row in df.iterrows():
+                cor = 'gray'
+                if area_col:
+                    # Atribui cor baseada na microárea
+                    idx = hash(str(row[area_col])) % len(cores)
+                    cor = cores[idx]
+                
+                folium.Marker(
+                    location=[row[lat_col], row[lon_col]],
+                    popup=f"Paciente: {row.get('Paciente', 'N/A')}",
+                    tooltip=f"Microárea: {row.get(area_col, 'N/A')}",
+                    icon=folium.Icon(color=cor)
+                ).add_to(mapa)
+            
+            st.success("Mapa gerado com sucesso!")
+            st_folium(mapa, width=1000, height=600)
         else:
-            bruto = carregar_planilha_generica(arquivo)
-            if list(bruto.columns) and 'CPF' in [str(c).strip() for c in bruto.columns]:
-                return bruto
-            arquivo.seek(0)
-            for enc in ['utf-8', 'latin1', 'cp1252']:
-                try:
-                    bruto = pd.read_csv(arquivo, header=None, encoding=enc)
-                    break
-                except Exception:
-                    arquivo.seek(0)
-            else:
-                arquivo.seek(0)
-                bruto = pd.read_csv(arquivo, header=None, encoding='latin1')
-        header_idx = None
-        for i in range(min(len(bruto), 40)):
-            vals = ' '.join(bruto.iloc[i].fillna('').astype(str).tolist()).lower()
-            if 'cpf' in vals and 'cns' in vals and 'nascimento' in vals and 'sexo' in vals and ('raça cor' in vals or 'raca cor' in vals) and 'cnes' in vals and 'ine' in vals and 'a' in vals and 'b' in vals and 'c' in vals and 'd' in vals:
-                header_idx = i
-                break
-        if header_idx is None:
-            return pd.DataFrame()
-        header = [str(x).strip() for x in bruto.iloc[header_idx].tolist()]
-        dados = bruto.iloc[header_idx+1:].copy()
-        dados.columns = header
-        dados = remover_colunas_duplicadas(dados)
-        return dados
+            st.error("Por favor, selecione as colunas de Latitude e Longitude.")
+else:
+    st.info("Aguardando upload da planilha...")
+```
 
-    df_siaps = carregar_siaps_bruto(arq_siaps)
-    df_siaps.columns = [str(c).strip() for c in df_siaps.columns]
-    df_siaps = limpar_siaps_hipertensao(df_siaps)
-    tipo = detectar_tipo_siaps(df_siaps, arq_siaps.name)
-    if tipo != 'SIAPS_HIPERTENSAO_BOAS_PRATICAS':
-        st.error('Não foi possível identificar a planilha SIAPS de hipertensão.')
-        return
+### Notas Importantes para o Sucesso:
 
-    df_cad = carregar_base_cadastro(arq_cad)
-    merged = cruzar_siaps_com_cadastro(df_siaps, df_cad)
-    merged = preparar_siaps_hipertensao_boas_praticas(merged)
-
-    siaps_total = int(merged['Encontrado na SIAPS'].fillna(False).astype(bool).sum()) if 'Encontrado na SIAPS' in merged.columns else 0
-    comum = int((merged['Encontrado na SIAPS'].fillna(False).astype(bool) & merged['Encontrado na Complementar'].fillna(False).astype(bool)).sum())
-    so_siaps = int((merged['Encontrado na SIAPS'].fillna(False).astype(bool) & ~merged['Encontrado na Complementar'].fillna(False).astype(bool)).sum())
-    so_cad = int((~merged['Encontrado na SIAPS'].fillna(False).astype(bool) & merged['Encontrado na Complementar'].fillna(False).astype(bool)).sum())
-
-    st.sidebar.header('Filtros da busca ativa')
-    view = st.sidebar.selectbox('Visualização', ['Todos', 'Somente em comum', 'Somente SIAPS', 'Somente complementar'])
-    eq = st.sidebar.selectbox('Equipe', ['Todas'] + sorted([x for x in merged.get('Equipe Área', pd.Series(dtype=str)).dropna().astype(str).str.strip().unique() if x])) if 'Equipe Área' in merged.columns else 'Todas'
-    mi = st.sidebar.selectbox('Microárea', ['Todas'] + sorted([x for x in merged.get('Microárea', pd.Series(dtype=str)).dropna().astype(str).str.strip().unique() if x])) if 'Microárea' in merged.columns else 'Todas'
-    faixa = st.sidebar.selectbox('Faixa etária', ['Todas', '0-17', '18-39', '40-59', '60+'])
-    pend = st.sidebar.selectbox('Pendência', ['Todas', 'A', 'B', 'C', 'D'])
-
-    merged = remover_colunas_duplicadas(merged)
-    vis = merged.copy()
-    if view == 'Somente em comum': vis = vis[vis['Encontrado na SIAPS'] & vis['Encontrado na Complementar']]
-    elif view == 'Somente SIAPS': vis = vis[vis['Encontrado na SIAPS'] & ~vis['Encontrado na Complementar']]
-    elif view == 'Somente complementar': vis = vis[~vis['Encontrado na SIAPS'] & vis['Encontrado na Complementar']]
-    if eq != 'Todas' and 'Equipe Área' in vis.columns: vis = vis[vis['Equipe Área'].astype(str).str.strip() == eq]
-    if mi != 'Todas' and 'Microárea' in vis.columns: vis = vis[vis['Microárea'].astype(str).str.strip() == mi]
-    if faixa != 'Todas' and 'Idade' in vis.columns:
-        a,b = {'0-17':(0,17),'18-39':(18,39),'40-59':(40,59),'60+':(60,200)}[faixa]
-        vis = vis[pd.to_numeric(vis['Idade'], errors='coerce').between(a,b,inclusive='both')]
-    if pend != 'Todas' and f'pendencia_{pend}' in vis.columns: vis = vis[vis[f'pendencia_{pend}']]
-
-    m = contar_boas_praticas(merged)
-    st.metric('SIAPS total', siaps_total)
-    st.metric('Em comum', comum)
-    st.metric('Só SIAPS', so_siaps)
-    st.metric('Só complementar', so_cad)
-    st.metric('Exibidos após filtros', len(vis))
-
-    cols = ['Nome Completo','CPF','CNS','Data de Nascimento','Idade','Endereço','Equipe Área','Microárea','Equipe Vínculo','Sexo','Raça','A','B','C','D','Encontrado na SIAPS','Encontrado na Complementar']
-    for c in cols:
-        if c not in vis.columns: vis[c] = ''
-
-    st.subheader('Lista Nominal SIAPS')
-    vis = remover_colunas_duplicadas(vis)
-    vis = vis.loc[:, [c for i, c in enumerate(cols) if c in vis.columns and c not in cols[:i]]].copy()
-    st.dataframe(vis, use_container_width=True)
-    st.caption(f'Total após filtros: {len(vis)}')
-
-
-if __name__ == '__main__':
-    main()
+1.  **Latitude e Longitude:** Como discutimos, o Folium precisa de coordenadas numéricas. Certifique-se de que sua planilha tenha colunas com valores como `-23.218` e `-47.520`. Se a sua planilha tiver apenas o endereço escrito, o próximo passo será integrar uma função de geocodificação (como a biblioteca `geopy`) para converter esses endereços antes de gerar o mapa.
+2.  **Polígonos (Áreas das Equipes):** Para adicionar as suas camadas do Google Maps (GeoJSON), basta adicionar isto logo após a criação do `mapa = folium.Map(...)`:
+    ```python
+    # Exemplo de como carregar suas áreas desenhadas
+    # folium.GeoJson("suas_areas.geojson").add_to(mapa)
