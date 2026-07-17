@@ -94,6 +94,15 @@ def detectar_tipo_siaps(df: pd.DataFrame, nome_arquivo: str = ''):
         return 'SIAPS_HIPERTENSAO_BOAS_PRATICAS'
     return None
 
+
+
+def limpar_siaps_hipertensao(df):
+    df = df.copy()
+    if 'CPF' in df.columns:
+        cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True)
+        df = df[df['CPF'].isna() | cpf.str.len().eq(11)]
+    return df
+
 def carregar_planilha_generica(arquivo):
     nome = arquivo.name.lower()
     arquivo.seek(0)
@@ -197,6 +206,8 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
             merged[base_col] = merged[ca]
 
     merged['Origem do registro'] = merged['_merge'].map({'both': 'SIAPS + Complementar', 'left_only': 'Apenas SIAPS', 'right_only': 'Apenas Complementar'})
+    if 'Nome Completo_cad' in merged.columns and 'Nome Completo' not in merged.columns:
+        merged['Nome Completo'] = merged['Nome Completo_cad']
     merged = merged.drop(columns=['_merge', 'CPF_norm'], errors='ignore')
     return merged
 
@@ -277,11 +288,11 @@ def render_siaps_hipertensao_boas_praticas(df):
     st.sidebar.header('Filtros da busca ativa')
     filtrado = df.copy()
 
-    if 'Equipe' in filtrado.columns:
-        eq_opts = ['Todas'] + sorted([x for x in filtrado['Equipe'].dropna().astype(str).str.strip().unique().tolist() if x])
+    if 'Equipe Área' in filtrado.columns:
+        eq_opts = ['Todas'] + sorted([x for x in filtrado['Equipe Área'].dropna().astype(str).str.strip().unique().tolist() if x])
         eq_sel = st.sidebar.selectbox('Equipe', eq_opts, index=0)
         if eq_sel != 'Todas':
-            filtrado = filtrado[filtrado['Equipe'].astype(str).str.strip() == eq_sel]
+            filtrado = filtrado[filtrado['Equipe Área'].astype(str).str.strip() == eq_sel]
 
     if 'Microárea' in filtrado.columns:
         mi_opts = ['Todas'] + sorted([x for x in filtrado['Microárea'].dropna().astype(str).str.strip().unique().tolist() if x])
@@ -295,10 +306,9 @@ def render_siaps_hipertensao_boas_praticas(df):
         mn, mx = faixas[faixa_sel]
         filtrado = filtrado[pd.to_numeric(filtrado['Idade'], errors='coerce').between(mn, mx, inclusive='both')]
 
-    pend_sel = st.sidebar.selectbox('Pendência de boas práticas', ['Todas', 'A - Consulta', 'B - PA', 'C - Peso/altura', 'D - Visitas ACS'], index=0)
+    pend_sel = st.sidebar.selectbox('Pendência de boas práticas', ['Todas', 'A', 'B', 'C', 'D'], index=0)
     if pend_sel != 'Todas':
-        mapa = {'A - Consulta': 'pendencia_A', 'B - PA': 'pendencia_B', 'C - Peso/altura': 'pendencia_C', 'D - Visitas ACS': 'pendencia_D'}
-        filtrado = filtrado[filtrado[mapa[pend_sel]]]
+        filtrado = filtrado[filtrado[f'pendencia_{pend_sel}']]
 
     m = calcular_metricas_siaps_hipertensao(filtrado)
     exibirmetricascards(
@@ -306,60 +316,16 @@ def render_siaps_hipertensao_boas_praticas(df):
         ('Denominador', m['denominador']),
         ('Numerador', m['numerador']),
         ('Desempenho', f"{m['desempenho']:.1f}%"),
-        ('Boas práticas', f"{m['boas_praticas_cumpridas']}/{m['boas_praticas_possiveis']}"),
-    )
-    exibirmetricascards(
-        ('Pendência A', m['pend_a']),
-        ('Pendência B', m['pend_b']),
-        ('Pendência C', m['pend_c']),
-        ('Pendência D', m['pend_d']),
     )
 
-    cobertura = pd.DataFrame({
-        'Boa prática': ['A - Consulta', 'B - PA', 'C - Peso/altura', 'D - Visitas ACS'],
-        'Cumpridos': [m['cumpriu_a'], m['cumpriu_b'], m['cumpriu_c'], m['cumpriu_d']],
-        'Pendentes': [m['pend_a'], m['pend_b'], m['pend_c'], m['pend_d']],
-    })
+    cols = ['Nome Completo','CPF','CNS','Data de Nascimento','Idade','Endereço','Equipe Área','Microárea','Equipe Vínculo','Sexo','Raça','A','B','C','D','Encontrado na SIAPS','Encontrado na Complementar']
+    for c in cols:
+        if c not in filtrado.columns:
+            filtrado[c] = ''
 
-    st.subheader('Lista nominal SIAPS')
-    st.dataframe(filtrado, use_container_width=True)
+    st.subheader('Lista Nominal SIAPS')
+    st.dataframe(filtrado[cols], use_container_width=True)
 
-    if 'Encontrado na complementar' in filtrado.columns:
-        st.subheader('Base complementar cruzada')
-        st.dataframe(filtrado, use_container_width=True)
-
-    st.subheader('Cobertura das boas práticas')
-    graficobarras(cobertura, 'Boa prática', 'Cumpridos', 'Boas práticas cumpridas - Hipertensão SIAPS')
-
-
-    st.subheader('Lista nominal de pendências')
-    somente_pendentes = st.checkbox(
-        'Mostrar apenas pacientes com alguma pendência',
-        value=True,
-        key='siaps_hipertensao_somente_pendentes',
-    )
-
-    lista = df.copy()
-    if somente_pendentes:
-        lista = lista[lista['total_pendencias'] > 0]
-
-    lista = lista.sort_values(by=['total_pendencias', 'total_boas_praticas'], ascending=[False, True])
-
-    colunas_saida = [
-        'CPF', 'CNS', 'Nascimento', 'Sexo', 'Raça cor', 'Raça/Cor descrita',
-        'CNES', 'INE', 'A', 'B', 'C', 'D', 'NM', 'DN',
-        'total_boas_praticas', 'total_pendencias', 'Motivo da pendência'
-    ]
-    colunas_saida = [c for c in colunas_saida if c in lista.columns]
-
-    st.download_button(
-        'Exportar lista nominal SIAPS - Hipertensão',
-        data=dataframeparaexcelbytes(lista[colunas_saida]),
-        file_name='siaps_hipertensao_boas_praticas.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        key='download_siaps_hipertensao',
-    )
-    st.dataframe(lista[colunas_saida], use_container_width=True)
 
 
 arquivo_siaps = file_uploader_compat('Envie a planilha SIAPS', type=['xlsx', 'xls', 'csv'])
@@ -403,6 +369,8 @@ else:
         else:
             arquivo_siaps.seek(0)
             df = carregar_planilha_generica(arquivo_siaps)
+            if hasattr(df, 'shape'):
+                df = limpar_siaps_hipertensao(df)
             linhadetectada, origem = detectar_linha_cuidado(df, arquivo_siaps.name)
             if linhadetectada is None:
                 st.warning('Não foi possível identificar automaticamente a linha de cuidado. Escolha manualmente abaixo.')
