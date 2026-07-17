@@ -7,24 +7,26 @@ st.set_page_config(layout='wide', page_title='Dashboard APS - Hipertensão')
 
 # --- Funções de Processamento ---
 def normalizar_cpf(s):
-    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
+    # Converte para string e remove TUDO que não for dígito
+    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True)
 
 def carregar_e_limpar(arquivo, eh_siaps=False):
     arquivo.seek(0)
     df = pd.read_excel(arquivo, header=None)
     
-    # Define linha de cabeçalho: 18 para SIAPS (índice 17), 1 para Complementar (índice 0)
     idx = 17 if eh_siaps else 0
     df.columns = [str(c).strip() for c in df.iloc[idx]]
     df = df.iloc[idx + 1:].reset_index(drop=True)
     
-    # Localiza coluna de CPF
     col_cpf = next((c for c in df.columns if 'CPF' in c.upper()), None)
     if col_cpf:
+        # AQUI ESTÁ O SEGREDO: forçamos a limpeza do CPF
         df['CPF_key'] = normalizar_cpf(df[col_cpf])
-        # Filtro: mantém apenas linhas onde o CPF é um número de 11 dígitos válido
+        
+        # Filtro estrito: CPF tem que ter exatamente 11 dígitos e não ser '00000000000'
+        # Isso descarta automaticamente legendas, textos e linhas de "Total"
         df = df[df['CPF_key'].str.match(r'^\d{11}$')]
-        df = df[~df['CPF_key'].isin(['00000000000', ''])]
+        df = df[df['CPF_key'] != '00000000000']
     return df
 
 # --- Interface ---
@@ -38,31 +40,26 @@ MAPA_INDICADORES = {
 }
 
 with st.sidebar:
-    st.header("Uploads de Arquivos")
-    arq_siaps = st.file_uploader('1. Planilha SIAPS (Resultado)', type=['xlsx'])
+    st.header("Uploads")
+    arq_siaps = st.file_uploader('1. Planilha SIAPS', type=['xlsx'])
     arq_cad = st.file_uploader('2. Planilha Complementar', type=['xlsx'])
 
 if arq_siaps and arq_cad:
-    # Processamento
     df_siaps = carregar_e_limpar(arq_siaps, eh_siaps=True)
     df_cad = carregar_e_limpar(arq_cad)
     
     df_siaps['Contém no SIAPS'] = 'X'
     df_cad['Contém na Complementar'] = 'X'
     
-    # Merge mantendo todos os CPFs válidos de ambas
     df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
 
-    # Função para buscar colunas: mapeamento inteligente
-    def get_col(nome_col_siaps, options_cad):
-        # Para indicadores, busca pelo nome exato no SIAPS
-        if nome_col_siaps in df_final.columns:
+    # Função de mapeamento flexível
+    def get_col(nome_siaps, options_cad):
+        if nome_siaps in df_final.columns:
             return df_final[nome_col_siaps].fillna('')
-        # Busca colunas complementares por similaridade de nome
         match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options_cad)), None)
         return df_final[match].fillna('') if match else ''
 
-    # Montagem da Lista Final
     df_lista = pd.DataFrame({
         'Nome Completo': get_col('', ['Nome', 'Paciente', 'Cidadão']),
         'CPF': df_final['CPF_key'],
@@ -81,7 +78,7 @@ if arq_siaps and arq_cad:
         'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
     })
 
-    # --- Monitoramento de Boas Práticas ---
+    # Monitoramento
     st.subheader('Monitoramento de Boas Práticas')
     total = len(df_lista)
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -93,20 +90,15 @@ if arq_siaps and arq_cad:
             perc = (count / total) * 100 if total > 0 else 0
             [c2, c3, c4, c5][i].metric(label, f"{perc:.1f}%", f"{count} pacientes")
 
-    # --- Gráfico ---
     st.subheader('Distribuição das Boas Práticas')
-    dados_grafico = [
-        {'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
-        for key, label in MAPA_INDICADORES.items() if key in df_lista.columns
-    ]
-    st.plotly_chart(px.bar(pd.DataFrame(dados_grafico), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
+    dados_graf = [{'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
+                  for key, label in MAPA_INDICADORES.items() if key in df_lista.columns]
+    st.plotly_chart(px.bar(pd.DataFrame(dados_graf), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
 
-    # --- Tabela Final ---
     st.subheader('Lista Nominal Unificada')
     st.dataframe(df_lista, use_container_width=True)
     
-    # Download
     csv = df_lista.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 Baixar Lista Nominal Consolidada", csv, "lista_consolidada.csv", "text/csv")
 else:
-    st.info('Por favor, faça o upload de ambas as planilhas para iniciar o monitoramento.')
+    st.info('Por favor, envie ambas as planilhas.')
