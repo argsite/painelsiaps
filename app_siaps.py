@@ -13,16 +13,13 @@ def carregar_e_limpar(arquivo, eh_siaps=False):
     arquivo.seek(0)
     df = pd.read_excel(arquivo, header=None)
     
-    # Define linha de cabeçalho: 18 para SIAPS (índice 17), 1 para Complementar (índice 0)
     idx = 17 if eh_siaps else 0
     df.columns = [str(c).strip() for c in df.iloc[idx]]
     df = df.iloc[idx + 1:].reset_index(drop=True)
     
-    # Localiza coluna de CPF
     col_cpf = next((c for c in df.columns if 'CPF' in c.upper()), None)
     if col_cpf:
         df['CPF_key'] = normalizar_cpf(df[col_cpf])
-        # Filtro: mantém apenas linhas onde o CPF é um número de 11 dígitos válido
         df = df[df['CPF_key'].str.match(r'^\d{11}$')]
         df = df[~df['CPF_key'].isin(['00000000000', ''])]
     return df
@@ -43,26 +40,25 @@ with st.sidebar:
     arq_cad = st.file_uploader('2. Planilha Complementar', type=['xlsx'])
 
 if arq_siaps and arq_cad:
-    # Processamento
     df_siaps = carregar_e_limpar(arq_siaps, eh_siaps=True)
     df_cad = carregar_e_limpar(arq_cad)
     
     df_siaps['Contém no SIAPS'] = 'X'
     df_cad['Contém na Complementar'] = 'X'
     
-    # Merge mantendo todos os CPFs válidos de ambas
+    # Merge
     df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
+    
+    # FILTRO FINAL: Remove qualquer linha que não tenha CPF de 11 dígitos válido (elimina legendas remanescentes)
+    df_final = df_final[df_final['CPF_key'].str.match(r'^\d{11}$')]
 
-    # Função para buscar colunas: mapeamento inteligente
-    def get_col(nome_col_siaps, options_cad):
-        # Para indicadores, busca pelo nome exato no SIAPS
-        if nome_col_siaps in df_final.columns:
-            return df_final[nome_col_siaps].fillna('')
-        # Busca colunas complementares por similaridade de nome
+    # Função de mapeamento inteligente
+    def get_col(col_siaps, options_cad):
+        if col_siaps in df_final.columns:
+            return df_final[col_siaps].fillna('')
         match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options_cad)), None)
         return df_final[match].fillna('') if match else ''
 
-    # Montagem da Lista Final
     df_lista = pd.DataFrame({
         'Nome Completo': get_col('', ['Nome', 'Paciente', 'Cidadão']),
         'CPF': df_final['CPF_key'],
@@ -73,10 +69,10 @@ if arq_siaps and arq_cad:
         'Equipe Área': get_col('', ['Equipe Área', 'Equipe']),
         'Microárea': get_col('', ['Microárea', 'Micro']),
         'Equipe Vínculo': get_col('', ['Equipe Vínculo', 'Vinculo']),
-        'A': get_col('A', ['A']),
-        'B': get_col('B', ['B']),
-        'C': get_col('C', ['C']),
-        'D': get_col('D', ['D']),
+        'A': get_col('A', ['EXACT_INDICADOR_A']), 
+        'B': get_col('B', ['EXACT_INDICADOR_B']),
+        'C': get_col('C', ['EXACT_INDICADOR_C']),
+        'D': get_col('D', ['EXACT_INDICADOR_D']),
         'Contém no SIAPS': df_final.get('Contém no SIAPS', '').fillna(''),
         'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
     })
@@ -105,7 +101,6 @@ if arq_siaps and arq_cad:
     st.subheader('Lista Nominal Unificada')
     st.dataframe(df_lista, use_container_width=True)
     
-    # Download
     csv = df_lista.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 Baixar Lista Nominal Consolidada", csv, "lista_consolidada.csv", "text/csv")
 else:
