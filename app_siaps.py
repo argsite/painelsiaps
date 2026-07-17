@@ -183,95 +183,25 @@ def exibir_card(l1, v1, l2=None, v2=None):
 
 def main():
     arq_siaps = file_uploader_compat('Envie a planilha SIAPS', type=['csv','xlsx','xls'])
-    arq_cad = file_uploader_compat('Envie a planilha complementar', type=['csv','xlsx','xls'])
-    if arq_siaps is None or arq_cad is None:
-        st.info('Envie as duas planilhas para iniciar.')
+    if arq_siaps is None:
+        st.info('Envie a planilha SIAPS para iniciar.')
         return
 
-    def carregar_siaps_bruto(arquivo):
-        nome = arquivo.name.lower()
-        if nome.endswith(('.xlsx', '.xls')):
-            arquivo.seek(0)
-            bruto = pd.read_excel(arquivo, header=None)
-        else:
-            bruto = carregar_planilha_generica(arquivo)
-            if list(bruto.columns) and 'CPF' in [str(c).strip() for c in bruto.columns]:
-                return bruto
-            arquivo.seek(0)
-            for enc in ['utf-8', 'latin1', 'cp1252']:
-                try:
-                    bruto = pd.read_csv(arquivo, header=None, encoding=enc)
-                    break
-                except Exception:
-                    arquivo.seek(0)
-            else:
-                arquivo.seek(0)
-                bruto = pd.read_csv(arquivo, header=None, encoding='latin1')
-        header_idx = None
-        for i in range(min(len(bruto), 40)):
-            vals = ' '.join(bruto.iloc[i].fillna('').astype(str).tolist()).lower()
-            if 'cpf' in vals and 'cns' in vals and 'nascimento' in vals and 'sexo' in vals and ('raça cor' in vals or 'raca cor' in vals) and 'cnes' in vals and 'ine' in vals and 'a' in vals and 'b' in vals and 'c' in vals and 'd' in vals:
-                header_idx = i
-                break
-        if header_idx is None:
-            return pd.DataFrame()
-        header = [str(x).strip() for x in bruto.iloc[header_idx].tolist()]
-        dados = bruto.iloc[header_idx+1:].copy()
-        dados.columns = header
-        dados = remover_colunas_duplicadas(dados)
-        return dados
+    try:
+        df_siaps = carregar_siaps_bruto(arq_siaps)
+        df_siaps.columns = [str(c).strip() for c in df_siaps.columns]
+        df_siaps = limpar_siaps_hipertensao(df_siaps)
+        tipo = detectar_tipo_siaps(df_siaps, arq_siaps.name)
+        if tipo != 'SIAPS_HIPERTENSAO_BOAS_PRATICAS':
+            st.error('Não foi possível identificar a planilha SIAPS de hipertensão.')
+            return
 
-    df_siaps = carregar_siaps_bruto(arq_siaps)
-    df_siaps.columns = [str(c).strip() for c in df_siaps.columns]
-    df_siaps = limpar_siaps_hipertensao(df_siaps)
-    tipo = detectar_tipo_siaps(df_siaps, arq_siaps.name)
-    if tipo != 'SIAPS_HIPERTENSAO_BOAS_PRATICAS':
-        st.error('Não foi possível identificar a planilha SIAPS de hipertensão.')
-        return
+        df_lista = preparar_siaps_hipertensao_boas_praticas(df_siaps)
+        m = contar_boas_praticas(df_lista)
 
-    df_cad = carregar_base_cadastro(arq_cad)
-    merged = cruzar_siaps_com_cadastro(df_siaps, df_cad)
-    merged = preparar_siaps_hipertensao_boas_praticas(merged)
-
-    siaps_total = int(merged['Encontrado na SIAPS'].fillna(False).astype(bool).sum()) if 'Encontrado na SIAPS' in merged.columns else 0
-    comum = int((merged['Encontrado na SIAPS'].fillna(False).astype(bool) & merged['Encontrado na Complementar'].fillna(False).astype(bool)).sum())
-    so_siaps = int((merged['Encontrado na SIAPS'].fillna(False).astype(bool) & ~merged['Encontrado na Complementar'].fillna(False).astype(bool)).sum())
-    so_cad = int((~merged['Encontrado na SIAPS'].fillna(False).astype(bool) & merged['Encontrado na Complementar'].fillna(False).astype(bool)).sum())
-
-    st.sidebar.header('Filtros da busca ativa')
-    view = st.sidebar.selectbox('Visualização', ['Todos', 'Somente em comum', 'Somente SIAPS', 'Somente complementar'])
-    eq = st.sidebar.selectbox('Equipe', ['Todas'] + sorted([x for x in merged.get('Equipe Área', pd.Series(dtype=str)).dropna().astype(str).str.strip().unique() if x])) if 'Equipe Área' in merged.columns else 'Todas'
-    mi = st.sidebar.selectbox('Microárea', ['Todas'] + sorted([x for x in merged.get('Microárea', pd.Series(dtype=str)).dropna().astype(str).str.strip().unique() if x])) if 'Microárea' in merged.columns else 'Todas'
-    faixa = st.sidebar.selectbox('Faixa etária', ['Todas', '0-17', '18-39', '40-59', '60+'])
-    pend = st.sidebar.selectbox('Pendência', ['Todas', 'A', 'B', 'C', 'D'])
-
-    merged = remover_colunas_duplicadas(merged)
-    vis = merged.copy()
-    if view == 'Somente em comum': vis = vis[vis['Encontrado na SIAPS'] & vis['Encontrado na Complementar']]
-    elif view == 'Somente SIAPS': vis = vis[vis['Encontrado na SIAPS'] & ~vis['Encontrado na Complementar']]
-    elif view == 'Somente complementar': vis = vis[~vis['Encontrado na SIAPS'] & vis['Encontrado na Complementar']]
-    if eq != 'Todas' and 'Equipe Área' in vis.columns: vis = vis[vis['Equipe Área'].astype(str).str.strip() == eq]
-    if mi != 'Todas' and 'Microárea' in vis.columns: vis = vis[vis['Microárea'].astype(str).str.strip() == mi]
-    if faixa != 'Todas' and 'Idade' in vis.columns:
-        a,b = {'0-17':(0,17),'18-39':(18,39),'40-59':(40,59),'60+':(60,200)}[faixa]
-        vis = vis[pd.to_numeric(vis['Idade'], errors='coerce').between(a,b,inclusive='both')]
-    if pend != 'Todas' and f'pendencia_{pend}' in vis.columns: vis = vis[vis[f'pendencia_{pend}']]
-
-    m = contar_boas_praticas(merged)
-    st.metric('SIAPS total', siaps_total)
-    st.metric('Em comum', comum)
-    st.metric('Só SIAPS', so_siaps)
-    st.metric('Só complementar', so_cad)
-    st.metric('Exibidos após filtros', len(vis))
-
-    cols = ['Nome Completo','CPF','CNS','Data de Nascimento','Idade','Endereço','Equipe Área','Microárea','Equipe Vínculo','Sexo','Raça','A','B','C','D','Encontrado na SIAPS','Encontrado na Complementar']
-    for c in cols:
-        if c not in vis.columns: vis[c] = ''
-
-    
         st.subheader('Painel de monitoramento')
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric('Total de pacientes', len(merged))
+        c1.metric('Total de pacientes', len(df_lista))
         c2.metric('A', m.get('A', 0))
         c3.metric('B', m.get('B', 0))
         c4.metric('C', m.get('C', 0))
@@ -279,19 +209,26 @@ def main():
         with c5:
             barra(pd.DataFrame({'Indicador': ['A', 'B', 'C', 'D'], 'Quantidade': [m.get('A', 0), m.get('B', 0), m.get('C', 0), m.get('D', 0)]}), 'Indicador', 'Quantidade', 'Boas práticas')
         with c6:
-            if 'Idade' in merged.columns:
-                idade_df = merged.copy()
+            if 'Idade' in df_lista.columns:
+                idade_df = df_lista.copy()
                 idade_df['Faixa etária'] = pd.to_numeric(idade_df['Idade'], errors='coerce').fillna(-1).apply(lambda x: 'Ignorado' if x < 0 else ('0-17' if x <= 17 else '18-39' if x <= 39 else '40-59' if x <= 59 else '60+'))
                 faixa_df = idade_df['Faixa etária'].value_counts().reset_index()
                 faixa_df.columns = ['Faixa etária', 'Quantidade']
                 barra(faixa_df, 'Faixa etária', 'Quantidade', 'Faixa etária')
 
-st.subheader('Lista Nominal SIAPS')
-vis = remover_colunas_duplicadas(vis)
-vis = vis.loc[:, [c for i, c in enumerate(cols) if c in vis.columns and c not in cols[:i]]].copy()
-st.dataframe(remover_colunas_duplicadas(vis), use_container_width=True)
-st.caption(f'Total após filtros: {len(vis)}')
+        st.subheader('Lista Nominal SIAPS')
+        cols = ['Nome Completo','CPF','CNS','Data de Nascimento','Idade','Endereço','Equipe Área','Microárea','Equipe Vínculo','Sexo','Raça','A','B','C','D','NM','DN']
+        vis = df_lista.copy()
+        for c in cols:
+            if c not in vis.columns:
+                vis[c] = ''
+        vis = remover_colunas_duplicadas(vis)
+        vis = vis.loc[:, [c for c in cols if c in vis.columns]]
+        st.dataframe(vis, use_container_width=True)
+        st.caption(f'Total após filtros: {len(vis)}')
 
+    except Exception as e:
+        st.error(f'Não foi possível processar a planilha: {e}')
 
 if __name__ == '__main__':
     main()
