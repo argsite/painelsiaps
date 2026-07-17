@@ -288,34 +288,41 @@ def render_siaps_hipertensao_boas_praticas(df):
     st.sidebar.header('Filtros da busca ativa')
     filtrado = df.copy()
 
-    if 'Equipe Área' in filtrado.columns:
-        eq_opts = ['Todas'] + sorted([x for x in filtrado['Equipe Área'].dropna().astype(str).str.strip().unique().tolist() if x])
-        eq_sel = st.sidebar.selectbox('Equipe', eq_opts, index=0)
-        if eq_sel != 'Todas':
-            filtrado = filtrado[filtrado['Equipe Área'].astype(str).str.strip() == eq_sel]
+    def aplicar_filtros(base):
+        out = base.copy()
+        if 'Equipe Área' in out.columns:
+            eq_opts = ['Todas'] + sorted([x for x in out['Equipe Área'].dropna().astype(str).str.strip().unique().tolist() if x])
+            eq_sel = st.sidebar.selectbox('Equipe', eq_opts, index=0)
+            if eq_sel != 'Todas':
+                out = out[out['Equipe Área'].astype(str).str.strip() == eq_sel]
+        if 'Microárea' in out.columns:
+            mi_opts = ['Todas'] + sorted([x for x in out['Microárea'].dropna().astype(str).str.strip().unique().tolist() if x])
+            mi_sel = st.sidebar.selectbox('Microárea', mi_opts, index=0)
+            if mi_sel != 'Todas':
+                out = out[out['Microárea'].astype(str).str.strip() == mi_sel]
+        faixas = {'Todas': None, '0-17': (0, 17), '18-39': (18, 39), '40-59': (40, 59), '60+': (60, 200)}
+        faixa_sel = st.sidebar.selectbox('Faixa etária', list(faixas.keys()), index=0)
+        if faixa_sel != 'Todas' and 'Idade' in out.columns:
+            mn, mx = faixas[faixa_sel]
+            out = out[pd.to_numeric(out['Idade'], errors='coerce').between(mn, mx, inclusive='both')]
+        pend_sel = st.sidebar.selectbox('Pendência de boas práticas', ['Todas', 'A', 'B', 'C', 'D'], index=0)
+        if pend_sel != 'Todas':
+            out = out[out[f'pendencia_{pend_sel}']]
+        return out
 
-    if 'Microárea' in filtrado.columns:
-        mi_opts = ['Todas'] + sorted([x for x in filtrado['Microárea'].dropna().astype(str).str.strip().unique().tolist() if x])
-        mi_sel = st.sidebar.selectbox('Microárea', mi_opts, index=0)
-        if mi_sel != 'Todas':
-            filtrado = filtrado[filtrado['Microárea'].astype(str).str.strip() == mi_sel]
+    filtrado = aplicar_filtros(df)
 
-    faixas = {'Todas': None, '0-17': (0, 17), '18-39': (18, 39), '40-59': (40, 59), '60+': (60, 200)}
-    faixa_sel = st.sidebar.selectbox('Faixa etária', list(faixas.keys()), index=0)
-    if faixa_sel != 'Todas' and 'Idade' in filtrado.columns:
-        mn, mx = faixas[faixa_sel]
-        filtrado = filtrado[pd.to_numeric(filtrado['Idade'], errors='coerce').between(mn, mx, inclusive='both')]
+    m = calcular_metricas_siaps_hipertensao(df)
+    comum = int(df['Encontrado na SIAPS'].fillna(False).astype(bool).sum() if 'Encontrado na SIAPS' in df.columns else 0)
+    complementar = int(df['Encontrado na Complementar'].fillna(False).astype(bool).sum() if 'Encontrado na Complementar' in df.columns else 0)
+    total_exibidos = len(filtrado)
 
-    pend_sel = st.sidebar.selectbox('Pendência de boas práticas', ['Todas', 'A', 'B', 'C', 'D'], index=0)
-    if pend_sel != 'Todas':
-        filtrado = filtrado[filtrado[f'pendencia_{pend_sel}']]
-
-    m = calcular_metricas_siaps_hipertensao(filtrado)
     exibirmetricascards(
-        ('Total de pacientes', m['total_pacientes']),
-        ('Denominador', m['denominador']),
-        ('Numerador', m['numerador']),
-        ('Desempenho', f"{m['desempenho']:.1f}%"),
+        ('SIAPS total', m['total_pacientes']),
+        ('Em comum', comum),
+        ('Só SIAPS', int((~df['Encontrado na Complementar'].fillna(False).astype(bool)).sum()) if 'Encontrado na Complementar' in df.columns else 0),
+        ('Só complementar', int((~df['Encontrado na SIAPS'].fillna(False).astype(bool)).sum()) if 'Encontrado na SIAPS' in df.columns else 0),
+        ('Exibidos após filtros', total_exibidos),
     )
 
     cols = ['Nome Completo','CPF','CNS','Data de Nascimento','Idade','Endereço','Equipe Área','Microárea','Equipe Vínculo','Sexo','Raça','A','B','C','D','Encontrado na SIAPS','Encontrado na Complementar']
@@ -325,7 +332,7 @@ def render_siaps_hipertensao_boas_praticas(df):
 
     st.subheader('Lista Nominal SIAPS')
     st.dataframe(filtrado[cols], use_container_width=True)
-
+    st.caption(f'Total de pacientes após os filtros: {len(filtrado)}')
 
 
 arquivo_siaps = file_uploader_compat('Envie a planilha SIAPS', type=['xlsx', 'xls', 'csv'])
