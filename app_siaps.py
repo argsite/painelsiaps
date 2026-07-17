@@ -139,7 +139,6 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
     keep = ['CPF_norm'] + [c for c in ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo'] if c in cad.columns]
     cad = cad[keep].drop_duplicates('CPF_norm') if 'CPF_norm' in cad.columns else cad
     merged = siaps.merge(cad, on='CPF_norm', how='outer', suffixes=('_siaps', '_cad'), indicator=True)
-    merged = deduplicar_por_cpf(merged)
     merged['Encontrado na SIAPS'] = merged['_merge'].isin(['both', 'left_only'])
     merged['Encontrado na Complementar'] = merged['_merge'].isin(['both', 'right_only'])
     if 'Nome Completo_cad' in merged.columns:
