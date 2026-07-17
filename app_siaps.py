@@ -58,12 +58,12 @@ def detectar_tipo_siaps(df, nome_arquivo=''):
 
 def limpar_siaps_hipertensao(df):
     df = df.copy()
-    if 'CPF' in df.columns:
-        cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True)
-        df = df[df['CPF'].isna() | cpf.str.len().eq(11)]
-    df['CPF'] = cpf
+    if 'CPF' not in df.columns:
+        return df
+    cpf = df['CPF'].astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
+    df = df[df['CPF'].isna() | cpf.str.len().eq(11)].copy()
+    df['CPF'] = cpf.loc[df.index]
     return df
-
 
 def normalizar_cpf(s):
     return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
