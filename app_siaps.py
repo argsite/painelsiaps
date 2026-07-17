@@ -170,9 +170,39 @@ def main():
         st.info('Envie as duas planilhas para iniciar.')
         return
 
-    df_siaps = carregar_planilha_generica(arq_siaps)
-    if arq_siaps.name.lower().endswith(('.xlsx', '.xls')):
-        df_siaps = df_siaps.iloc[17:].copy()
+    def carregar_siaps_bruto(arquivo):
+        nome = arquivo.name.lower()
+        if nome.endswith(('.xlsx', '.xls')):
+            arquivo.seek(0)
+            bruto = pd.read_excel(arquivo, header=None)
+        else:
+            bruto = carregar_planilha_generica(arquivo)
+            if list(bruto.columns) and 'CPF' in [str(c).strip() for c in bruto.columns]:
+                return bruto
+            arquivo.seek(0)
+            for enc in ['utf-8', 'latin1', 'cp1252']:
+                try:
+                    bruto = pd.read_csv(arquivo, header=None, encoding=enc)
+                    break
+                except Exception:
+                    arquivo.seek(0)
+            else:
+                arquivo.seek(0)
+                bruto = pd.read_csv(arquivo, header=None, encoding='latin1')
+        header_idx = None
+        for i in range(min(len(bruto), 40)):
+            vals = ' '.join(bruto.iloc[i].fillna('').astype(str).tolist()).lower()
+            if 'cpf' in vals and 'cns' in vals and 'nascimento' in vals and 'sexo' in vals and ('raça cor' in vals or 'raca cor' in vals) and 'cnes' in vals and 'ine' in vals and 'a' in vals and 'b' in vals and 'c' in vals and 'd' in vals:
+                header_idx = i
+                break
+        if header_idx is None:
+            return pd.DataFrame()
+        header = [str(x).strip() for x in bruto.iloc[header_idx].tolist()]
+        dados = bruto.iloc[header_idx+1:].copy()
+        dados.columns = header
+        return dados
+
+    df_siaps = carregar_siaps_bruto(arq_siaps)
     df_siaps.columns = [str(c).strip() for c in df_siaps.columns]
     df_siaps = limpar_siaps_hipertensao(df_siaps)
     tipo = detectar_tipo_siaps(df_siaps, arq_siaps.name)
