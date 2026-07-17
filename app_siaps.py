@@ -158,10 +158,10 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
     }
 
     for out_col, sources in priority.items():
-        merged[out_col] = pd.NA
+        merged[out_col] = None
         for src in sources:
             if src in merged.columns:
-                merged[out_col] = merged[out_col].combine_first(merged[src])
+                merged[out_col] = merged[out_col].combine_first(merged[src].replace({'None': pd.NA, 'nan': pd.NA, 'NaN': pd.NA})) if hasattr(merged[out_col], 'combine_first') else merged[src]
 
     merged['Encontrado na SIAPS'] = True
     merged['Encontrado na Complementar'] = merged['_match_complementar']
