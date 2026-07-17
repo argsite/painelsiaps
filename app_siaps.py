@@ -7,14 +7,14 @@ st.set_page_config(layout='wide', page_title='Dashboard APS - Hipertensão')
 
 # --- Funções de Processamento ---
 def normalizar_cpf(s):
-    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True)
+    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
 
 def carregar_e_limpar(arquivo, eh_siaps=False):
     arquivo.seek(0)
     df = pd.read_excel(arquivo, header=None)
     
+    # Define linha de cabeçalho: 18 para SIAPS (índice 17), 1 para Complementar (índice 0)
     idx = 17 if eh_siaps else 0
-    # Limpa cabeçalho
     df.columns = [str(c).strip() for c in df.iloc[idx]]
     df = df.iloc[idx + 1:].reset_index(drop=True)
     
@@ -22,79 +22,91 @@ def carregar_e_limpar(arquivo, eh_siaps=False):
     col_cpf = next((c for c in df.columns if 'CPF' in c.upper()), None)
     if col_cpf:
         df['CPF_key'] = normalizar_cpf(df[col_cpf])
-        # Filtra apenas linhas com CPF de 11 dígitos
+        # Filtro: mantém apenas linhas onde o CPF é um número de 11 dígitos válido
         df = df[df['CPF_key'].str.match(r'^\d{11}$')]
         df = df[~df['CPF_key'].isin(['00000000000', ''])]
-    else:
-        df['CPF_key'] = pd.Series(dtype=str)
     return df
 
 # --- Interface ---
 st.title('🏥 Dashboard APS - Hipertensão')
 
-MAPA_INDICADORES = {'A': 'A - Consultas', 'B': 'B - P.A.', 'C': 'C - Peso/Altura', 'D': 'D - Visitas'}
+MAPA_INDICADORES = {
+    'A': 'A - Consultas',
+    'B': 'B - P.A.',
+    'C': 'C - Peso/Altura',
+    'D': 'D - Visitas'
+}
 
 with st.sidebar:
-    st.header("Uploads")
-    arq_siaps = st.file_uploader('1. Planilha SIAPS', type=['xlsx'])
+    st.header("Uploads de Arquivos")
+    arq_siaps = st.file_uploader('1. Planilha SIAPS (Resultado)', type=['xlsx'])
     arq_cad = st.file_uploader('2. Planilha Complementar', type=['xlsx'])
 
 if arq_siaps and arq_cad:
+    # Processamento
     df_siaps = carregar_e_limpar(arq_siaps, eh_siaps=True)
     df_cad = carregar_e_limpar(arq_cad)
     
-    # Validação de segurança antes do merge
-    if 'CPF_key' not in df_siaps.columns or 'CPF_key' not in df_cad.columns:
-        st.error("Erro: Não foi possível identificar a coluna CPF em um dos arquivos.")
-    else:
-        df_siaps['Contém no SIAPS'] = 'X'
-        df_cad['Contém na Complementar'] = 'X'
-        
-        df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
+    df_siaps['Contém no SIAPS'] = 'X'
+    df_cad['Contém na Complementar'] = 'X'
+    
+    # Merge mantendo todos os CPFs válidos de ambas
+    df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
 
-        def get_col(col_siaps, options_cad):
-            if col_siaps in df_final.columns:
-                return df_final[col_siaps].fillna('')
-            match = next((c for c in df_final.columns if any(opt.lower() == c.lower() for opt in options_cad)), None)
-            return df_final[match].fillna('') if match else ''
+    # Função para buscar colunas: mapeamento inteligente
+    def get_col(nome_col_siaps, options_cad):
+        # Para indicadores, busca pelo nome exato no SIAPS
+        if nome_col_siaps in df_final.columns:
+            return df_final[nome_col_siaps].fillna('')
+        # Busca colunas complementares por similaridade de nome
+        match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options_cad)), None)
+        return df_final[match].fillna('') if match else ''
 
-        df_lista = pd.DataFrame({
-            'Nome Completo': get_col('', ['Nome', 'Nome Completo', 'Paciente', 'Cidadão']),
-            'CPF': df_final['CPF_key'],
-            'CNS': get_col('', ['CNS', 'Cartão', 'Cartão SUS', 'SUS']),
-            'Data Nascimento': get_col('', ['Data Nascimento', 'Data de Nascimento', 'Nascimento']),
-            'Idade': get_col('', ['Idade']),
-            'Endereço': get_col('', ['Endereço', 'Logradouro', 'Endereco']),
-            'Equipe Área': get_col('', ['Equipe Área', 'Equipe']),
-            'Microárea': get_col('', ['Microárea', 'Micro']),
-            'Equipe Vínculo': get_col('', ['Equipe Vínculo', 'Vinculo']),
-            'A': get_col('A', ['A']),
-            'B': get_col('B', ['B']),
-            'C': get_col('C', ['C']),
-            'D': get_col('D', ['D']),
-            'Contém no SIAPS': df_final.get('Contém no SIAPS', '').fillna(''),
-            'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
-        })
+    # Montagem da Lista Final
+    df_lista = pd.DataFrame({
+        'Nome Completo': get_col('', ['Nome', 'Paciente', 'Cidadão']),
+        'CPF': df_final['CPF_key'],
+        'CNS': get_col('', ['CNS', 'Cartão', 'SUS']),
+        'Data Nascimento': get_col('', ['Nascimento', 'Data']),
+        'Idade': get_col('', ['Idade']),
+        'Endereço': get_col('', ['Endereço', 'Logradouro', 'Endereço Residencial']),
+        'Equipe Área': get_col('', ['Equipe Área', 'Equipe']),
+        'Microárea': get_col('', ['Microárea', 'Micro']),
+        'Equipe Vínculo': get_col('', ['Equipe Vínculo', 'Vinculo']),
+        'A': get_col('A', ['A']),
+        'B': get_col('B', ['B']),
+        'C': get_col('C', ['C']),
+        'D': get_col('D', ['D']),
+        'Contém no SIAPS': df_final.get('Contém no SIAPS', '').fillna(''),
+        'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
+    })
 
-        st.subheader('Monitoramento de Boas Práticas')
-        total = len(df_lista)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric('Total de pacientes', total)
-        
-        for i, (key, label) in enumerate(MAPA_INDICADORES.items()):
+    # --- Monitoramento de Boas Práticas ---
+    st.subheader('Monitoramento de Boas Práticas')
+    total = len(df_lista)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric('Total de pacientes', total)
+    
+    for i, (key, label) in enumerate(MAPA_INDICADORES.items()):
+        if key in df_lista.columns:
             count = df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)
             perc = (count / total) * 100 if total > 0 else 0
             [c2, c3, c4, c5][i].metric(label, f"{perc:.1f}%", f"{count} pacientes")
 
-        st.subheader('Distribuição das Boas Práticas')
-        dados = [{'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
-                 for key, label in MAPA_INDICADORES.items() if key in df_lista.columns]
-        st.plotly_chart(px.bar(pd.DataFrame(dados), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
+    # --- Gráfico ---
+    st.subheader('Distribuição das Boas Práticas')
+    dados_grafico = [
+        {'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
+        for key, label in MAPA_INDICADORES.items() if key in df_lista.columns
+    ]
+    st.plotly_chart(px.bar(pd.DataFrame(dados_grafico), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
 
-        st.subheader('Lista Nominal Unificada')
-        st.dataframe(df_lista, use_container_width=True)
-        
-        csv = df_lista.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 Baixar Lista Nominal Consolidada", csv, "lista_consolidada.csv", "text/csv")
+    # --- Tabela Final ---
+    st.subheader('Lista Nominal Unificada')
+    st.dataframe(df_lista, use_container_width=True)
+    
+    # Download
+    csv = df_lista.to_csv(index=False).encode('utf-8-sig')
+    st.download_button("📥 Baixar Lista Nominal Consolidada", csv, "lista_consolidada.csv", "text/csv")
 else:
-    st.info('Por favor, faça o upload de ambas as planilhas.')
+    st.info('Por favor, faça o upload de ambas as planilhas para iniciar o monitoramento.')
