@@ -10,30 +10,15 @@ def normalizar_cpf(s):
 def carregar_e_limpar(arquivo, eh_siaps=False):
     arquivo.seek(0)
     df = pd.read_excel(arquivo, header=None)
-    
-    # Cabeçalho: linha 18 para SIAPS, linha 1 para Complementar
     idx = 17 if eh_siaps else 0
     df.columns = [str(c).strip() for c in df.iloc[idx]]
     df = df.iloc[idx + 1:].reset_index(drop=True)
     
-    # Identificar coluna de CPF e filtrar linhas inválidas
     col_cpf = next((c for c in df.columns if 'CPF' in c.upper()), None)
     if col_cpf:
         df['CPF_key'] = normalizar_cpf(df[col_cpf])
-        
-        # FILTRO RIGOROSO:
-        # 1. O CPF deve ter 11 dígitos numéricos
-        # 2. O CPF não pode ser '00000000000'
-        # 3. Nome ou CNS devem existir (para descartar legendas que não são pacientes)
         df = df[df['CPF_key'].str.match(r'^\d{11}$')]
         df = df[~df['CPF_key'].isin(['00000000000', ''])]
-        
-        # Extra: se houver coluna de Nome, remove linhas onde o nome é uma legenda comum
-        col_nome = next((c for c in df.columns if 'NOME' in c.upper()), None)
-        if col_nome:
-            legendas = ['BRANCA', 'PRETA', 'PARDA', 'AMARELA', 'INDIGENA', 'SEM INFORMACAO']
-            df = df[~df[col_nome].astype(str).str.upper().isin(legendas)]
-            
     return df
 
 st.title('🏥 Dashboard APS - Hipertensão')
@@ -49,46 +34,54 @@ if arq_siaps and arq_cad:
     df_siaps = carregar_e_limpar(arq_siaps, eh_siaps=True)
     df_cad = carregar_e_limpar(arq_cad)
     
+    # Criamos flags de presença antes do merge
     df_siaps['Contém no SIAPS'] = 'X'
     df_cad['Contém na Complementar'] = 'X'
+    
+    # Unifica as bases
     df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
 
-    def get_col(options):
-        match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options)), None)
-        return df_final[match] if match else ''
+    # Função para buscar colunas: prioriza a do SIAPS para indicadores, a da Complementar para demografia
+    def get_val(col_siaps, col_cad_opts):
+        # Para A, B, C, D, queremos o valor do SIAPS
+        if col_siaps in df_final.columns:
+            return df_final[col_siaps].fillna('')
+        # Para outros dados, busca na complementar
+        match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in col_cad_opts)), None)
+        return df_final[match].fillna('') if match else ''
 
     df_lista = pd.DataFrame({
-        'Nome Completo': get_col(['Nome', 'Paciente', 'Cidadão']),
+        'Nome Completo': get_col('', ['Nome', 'Paciente', 'Cidadão']),
         'CPF': df_final['CPF_key'],
-        'CNS': get_col(['CNS', 'Cartão', 'SUS']),
-        'Data Nascimento': get_col(['Nascimento', 'Data']),
-        'Idade': get_col(['Idade']),
-        'Endereço': get_col(['Endereço', 'Logradouro']),
-        'Equipe Área': get_col(['Equipe Área', 'Equipe']),
-        'Microárea': get_col(['Microárea', 'Micro']),
-        'Equipe Vínculo': get_col(['Vínculo', 'Vinculo']),
-        'A': df_final.get('A', ''),
-        'B': df_final.get('B', ''),
-        'C': df_final.get('C', ''),
-        'D': df_final.get('D', ''),
-        'Contém no SIAPS': df_final.get('Contém no SIAPS', '').fillna(''),
-        'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
+        'CNS': get_col('', ['CNS', 'Cartão', 'SUS']),
+        'Data Nascimento': get_col('', ['Nascimento', 'Data']),
+        'Idade': get_col('', ['Idade']),
+        'Endereço': get_col('', ['Endereço', 'Logradouro']),
+        'Equipe Área': get_col('', ['Equipe Área', 'Equipe']),
+        'Microárea': get_col('', ['Microárea', 'Micro']),
+        'Equipe Vínculo': get_col('', ['Vínculo', 'Vinculo']),
+        'A': get_val('A', ['A']),
+        'B': get_val('B', ['B']),
+        'C': get_val('C', ['C']),
+        'D': get_val('D', ['D']),
+        'Contém no SIAPS': df_final.get('Contém no SIAPS', ''),
+        'Contém na Complementar': df_final.get('Contém na Complementar', '')
     })
 
+    # Painel
     st.subheader('Monitoramento de Boas Práticas')
     total = len(df_lista)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric('Total de pacientes', total)
     
     for i, (key, label) in enumerate(MAPA_INDICADORES.items()):
-        if key in df_lista.columns:
-            count = df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)
-            perc = (count / total) * 100 if total > 0 else 0
-            [c2, c3, c4, c5][i].metric(label, f"{perc:.1f}%", f"{count} pacientes")
+        count = df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)
+        perc = (count / total) * 100 if total > 0 else 0
+        [c2, c3, c4, c5][i].metric(label, f"{perc:.1f}%", f"{count} pacientes")
 
     st.subheader('Distribuição das Boas Práticas')
     dados_graf = [{'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
-                  for key, label in MAPA_INDICADORES.items() if key in df_lista.columns]
+                  for key, label in MAPA_INDICADORES.items()]
     st.plotly_chart(px.bar(pd.DataFrame(dados_graf), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
 
     st.subheader('Lista Nominal Unificada')
@@ -97,4 +90,4 @@ if arq_siaps and arq_cad:
     csv = df_lista.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 Baixar Lista Nominal Consolidada", csv, "lista_consolidada.csv", "text/csv")
 else:
-    st.info('Por favor, faça o upload de ambas as planilhas para iniciar.')
+    st.info('Por favor, faça o upload de ambas as planilhas.')
