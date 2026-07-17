@@ -66,7 +66,12 @@ def limpar_siaps_hipertensao(df):
 
 
 def normalizar_cpf(s):
-    return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
+    s = s.fillna('').astype(str).str.upper().str.strip()
+    s = s.str.replace(r'\.0$', '', regex=True)
+    s = s.str.replace(r'\D+', '', regex=True)
+    s = s.replace('', pd.NA)
+    s = pd.to_numeric(s, errors='coerce').dropna().astype('Int64').astype(str)
+    return s.str.zfill(11) if isinstance(s, pd.Series) else s
 
 
 def preparar_siaps_hipertensao_boas_praticas(df):
@@ -96,11 +101,11 @@ def carregar_base_cadastro(arquivo):
     nome = arquivo.name.lower()
     if nome.endswith(('.xlsx', '.xls')):
         return pd.read_excel(arquivo)
-    for enc in ['utf-8', 'latin1', 'cp1252']:
+    for enc in ['latin1', 'cp1252', 'utf-8-sig', 'utf-8']:
         try:
             arquivo.seek(0)
             return pd.read_csv(arquivo, encoding=enc)
-        except UnicodeDecodeError:
+        except Exception:
             continue
     arquivo.seek(0)
     return pd.read_csv(arquivo, encoding='latin1', sep=None, engine='python')
@@ -134,41 +139,27 @@ def cruzar_siaps_com_cadastro(df_siaps, df_cadastro):
     siaps = deduplicar_por_cpf(df_siaps.copy())
     cad = normalizar_colunas_cadastro(df_cadastro.copy())
     cad = deduplicar_por_cpf(cad)
-
-    siaps['CPF_norm'] = normalizar_cpf(siaps['CPF']) if 'CPF' in siaps.columns else ''
-    cad['CPF_norm'] = normalizar_cpf(cad['CPF']) if 'CPF' in cad.columns else ''
-
-    cad_cols = ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']
-    cad = cad[['CPF_norm'] + [c for c in cad_cols if c in cad.columns]].drop_duplicates('CPF_norm') if 'CPF_norm' in cad.columns else cad
-
+    siaps['CPF_norm'] = normalizar_cpf(siaps['CPF']) if 'CPF' in siaps.columns else pd.NA
+    cad['CPF_norm'] = normalizar_cpf(cad['CPF']) if 'CPF' in cad.columns else pd.NA
+    siaps = siaps[siaps['CPF_norm'].notna()].copy() if 'CPF_norm' in siaps.columns else siaps
+    cad = cad[cad['CPF_norm'].notna()].copy() if 'CPF_norm' in cad.columns else cad
     merged = siaps.merge(cad, on='CPF_norm', how='left', suffixes=('_siaps', '_cad'))
-    merged['_match_complementar'] = merged['CPF_norm'].isin(cad['CPF_norm']) if 'CPF_norm' in cad.columns else False
-
-    priority = {
-        'Nome Completo': ['Nome Completo_cad', 'Nome Completo_siaps'],
-        'CNS': ['CNS_cad', 'CNS_siaps'],
-        'Data de Nascimento': ['Data de Nascimento_cad', 'Data de Nascimento_siaps'],
-        'Idade': ['Idade_cad', 'Idade_siaps'],
-        'Endereço': ['Endereço_cad', 'Endereço_siaps'],
-        'Equipe Área': ['Equipe Área_cad', 'Equipe Área_siaps'],
-        'Microárea': ['Microárea_cad', 'Microárea_siaps'],
-        'Equipe Vínculo': ['Equipe Vínculo_cad', 'Equipe Vínculo_siaps'],
-        'Sexo': ['Sexo_siaps'],
-        'Raça': ['Raça_siaps']
-    }
-
-    for out_col, sources in priority.items():
-        merged[out_col] = None
-        for src in sources:
-            if src in merged.columns:
-                merged[out_col] = merged[out_col].combine_first(merged[src].replace({'None': pd.NA, 'nan': pd.NA, 'NaN': pd.NA})) if hasattr(merged[out_col], 'combine_first') else merged[src]
-
     merged['Encontrado na SIAPS'] = True
-    merged['Encontrado na Complementar'] = merged['_match_complementar']
-    merged['Origem'] = merged['_match_complementar'].map({True: 'SIAPS + Complementar', False: 'Apenas SIAPS'})
-    merged = merged.drop(columns=['CPF_norm', '_match_complementar'], errors='ignore')
+    merged['Encontrado na Complementar'] = merged['CPF_norm'].isin(cad['CPF_norm']) if 'CPF_norm' in cad.columns else False
+    for col in ['Nome Completo', 'CNS', 'Data de Nascimento', 'Idade', 'Endereço', 'Equipe Área', 'Microárea', 'Equipe Vínculo']:
+        cad_col = f'{col}_cad'
+        siaps_col = f'{col}_siaps'
+        if cad_col in merged.columns:
+            merged[col] = merged[cad_col].where(merged[cad_col].notna() & (merged[cad_col].astype(str).str.strip() != ''), pd.NA)
+        else:
+            merged[col] = pd.NA
+        if siaps_col in merged.columns:
+            merged[col] = merged[col].combine_first(merged[siaps_col])
+    merged['Origem'] = merged['Encontrado na Complementar'].map({True: 'SIAPS + Complementar', False: 'Apenas SIAPS'})
+    merged = merged.drop(columns=['CPF_norm'], errors='ignore')
     merged = remover_colunas_duplicadas(merged)
     return merged
+
 
 def contar_boas_praticas(df):
     m = {}
