@@ -2,10 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Configuração da página
 st.set_page_config(layout='wide', page_title='Dashboard APS - Hipertensão')
 
-# --- Funções de Processamento ---
 def normalizar_cpf(s):
     return s.fillna('').astype(str).str.replace(r'\D+', '', regex=True).str.zfill(11)
 
@@ -13,48 +11,48 @@ def carregar_e_limpar(arquivo, eh_siaps=False):
     arquivo.seek(0)
     df = pd.read_excel(arquivo, header=None)
     
-    # Define linha de cabeçalho: 18 para SIAPS (índice 17), 1 para Complementar (índice 0)
+    # Cabeçalho: linha 18 para SIAPS, linha 1 para Complementar
     idx = 17 if eh_siaps else 0
     df.columns = [str(c).strip() for c in df.iloc[idx]]
     df = df.iloc[idx + 1:].reset_index(drop=True)
     
-    # Limpeza e normalização do CPF para cruzamento
+    # Identificar coluna de CPF e filtrar linhas inválidas
     col_cpf = next((c for c in df.columns if 'CPF' in c.upper()), None)
     if col_cpf:
         df['CPF_key'] = normalizar_cpf(df[col_cpf])
-        # Filtra linhas sem CPF ou CPFs inválidos/zerados (remove rodapé das planilhas)
-        df = df[df['CPF_key'].str.len() == 11]
+        
+        # FILTRO RIGOROSO:
+        # 1. O CPF deve ter 11 dígitos numéricos
+        # 2. O CPF não pode ser '00000000000'
+        # 3. Nome ou CNS devem existir (para descartar legendas que não são pacientes)
+        df = df[df['CPF_key'].str.match(r'^\d{11}$')]
         df = df[~df['CPF_key'].isin(['00000000000', ''])]
+        
+        # Extra: se houver coluna de Nome, remove linhas onde o nome é uma legenda comum
+        col_nome = next((c for c in df.columns if 'NOME' in c.upper()), None)
+        if col_nome:
+            legendas = ['BRANCA', 'PRETA', 'PARDA', 'AMARELA', 'INDIGENA', 'SEM INFORMACAO']
+            df = df[~df[col_nome].astype(str).str.upper().isin(legendas)]
+            
     return df
 
-# --- Interface Principal ---
 st.title('🏥 Dashboard APS - Hipertensão')
 
-# Mapeamento para os indicadores de Boas Práticas
-MAPA_INDICADORES = {
-    'A': 'A - Consultas',
-    'B': 'B - P.A.',
-    'C': 'C - Peso/Altura',
-    'D': 'D - Visitas'
-}
+MAPA_INDICADORES = {'A': 'A - Consultas', 'B': 'B - P.A.', 'C': 'C - Peso/Altura', 'D': 'D - Visitas'}
 
 with st.sidebar:
     st.header("Uploads de Arquivos")
-    arq_siaps = st.file_uploader('1. Planilha SIAPS (Resultado)', type=['xlsx'])
+    arq_siaps = st.file_uploader('1. Planilha SIAPS', type=['xlsx'])
     arq_cad = st.file_uploader('2. Planilha Complementar', type=['xlsx'])
 
 if arq_siaps and arq_cad:
-    # Processamento
     df_siaps = carregar_e_limpar(arq_siaps, eh_siaps=True)
     df_cad = carregar_e_limpar(arq_cad)
     
     df_siaps['Contém no SIAPS'] = 'X'
     df_cad['Contém na Complementar'] = 'X'
-    
-    # Merge das bases
     df_final = pd.merge(df_siaps, df_cad, on='CPF_key', how='outer', suffixes=('_siaps', '_cad'))
 
-    # Mapeamento de colunas com busca flexível
     def get_col(options):
         match = next((c for c in df_final.columns if any(opt.lower() in c.lower() for opt in options)), None)
         return df_final[match] if match else ''
@@ -77,7 +75,6 @@ if arq_siaps and arq_cad:
         'Contém na Complementar': df_final.get('Contém na Complementar', '').fillna('')
     })
 
-    # --- Monitoramento de Boas Práticas ---
     st.subheader('Monitoramento de Boas Práticas')
     total = len(df_lista)
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -89,21 +86,15 @@ if arq_siaps and arq_cad:
             perc = (count / total) * 100 if total > 0 else 0
             [c2, c3, c4, c5][i].metric(label, f"{perc:.1f}%", f"{count} pacientes")
 
-    # --- Gráfico ---
     st.subheader('Distribuição das Boas Práticas')
-    dados_grafico = [
-        {'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
-        for key, label in MAPA_INDICADORES.items() if key in df_lista.columns
-    ]
-    st.plotly_chart(px.bar(pd.DataFrame(dados_grafico), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
+    dados_graf = [{'Boas Práticas': label, 'Total': df_lista[key].astype(str).str.strip().str.upper().value_counts().get('X', 0)} 
+                  for key, label in MAPA_INDICADORES.items() if key in df_lista.columns]
+    st.plotly_chart(px.bar(pd.DataFrame(dados_graf), x='Boas Práticas', y='Total', text='Total'), use_container_width=True)
 
-    # --- Tabela Final ---
     st.subheader('Lista Nominal Unificada')
     st.dataframe(df_lista, use_container_width=True)
     
-    # Download
     csv = df_lista.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 Baixar Lista Nominal Consolidada", csv, "lista_consolidada.csv", "text/csv")
-
 else:
-    st.info('Por favor, faça o upload de ambas as planilhas para iniciar o monitoramento.')
+    st.info('Por favor, faça o upload de ambas as planilhas para iniciar.')
