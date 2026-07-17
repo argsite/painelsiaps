@@ -73,11 +73,3 @@ if arq_siaps:
     
 else:
     st.info('Envie a planilha do SIAPS na barra lateral para começar.')
-```eof
-
-### O que mudou e por que é melhor:
-*   **Segurança no Merge:** Usei `CPF_key` para garantir que o cruzamento aconteça perfeitamente, independentemente de como o CPF está formatado na planilha.
-*   **Cálculo Dinâmico:** As métricas de indicadores agora contam quantas vezes o "X" aparece, respeitando a forma como o SIAPS exporta as boas práticas.
-*   **Manutenção de Features:** Todos os componentes visuais que você tinha (Métricas, Gráficos, Tabela) estão presentes.
-
-Tente copiar esse bloco completo. Se encontrar qualquer erro ao rodar, me avise exatamente qual a mensagem que aparece!
