@@ -107,4 +107,3 @@ if arq_siaps and arq_cad:
 
 else:
     st.info('Por favor, faça o upload de ambas as planilhas para iniciar o monitoramento.')
-```eof
